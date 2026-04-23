@@ -185,6 +185,8 @@ def index():
 
 @app.route("/go2rtc/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 def go2rtc_proxy(path: str):
+    if request.method == "OPTIONS":
+        return Response("", status=204)
     url = f"{GO2RTC_UPSTREAM}/{path}"
     if request.query_string:
         url = url + "?" + request.query_string.decode()
