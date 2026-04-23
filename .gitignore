@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+*.tar.gz
+.env
+.venv/
+*.db-journal

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kaumaui Cam</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Kaumaui Cam</h1>
+      <nav class="tabs" id="tab-nav">
+        <button type="button" data-tab="live" class="active">Live</button>
+        <button type="button" data-tab="stream">Streaming</button>
+        <button type="button" data-tab="rec">Recordings</button>
+        <button type="button" data-tab="settings">Settings</button>
+      </nav>
+    </header>
+    <main>
+      <div id="global-banner"></div>
+
+      <section id="tab-live" class="tab-panel active">
+        <div class="grid grid-2">
+          <div class="panel">
+            <h2>Preview (WebRTC · livepreview)</h2>
+            <div class="video-wrap">
+              <video id="live-video" playsinline autoplay muted></video>
+            </div>
+            <div class="row" style="margin-top: 0.75rem">
+              <button type="button" class="btn btn-secondary" id="btn-webrtc-start">Connect video</button>
+              <button type="button" class="btn btn-secondary" id="btn-webrtc-stop">Disconnect</button>
+              <button type="button" class="btn btn-secondary" id="btn-ensure-livepreview">Create livepreview profile</button>
+            </div>
+            <p class="status-line" id="webrtc-status"></p>
+          </div>
+          <div class="panel">
+            <h2>PTZ</h2>
+            <p class="status-line" id="ptz-readout">—</p>
+            <div class="ptz-pad">
+              <span class="blank"></span>
+              <button type="button" data-move="0,40,0">▲</button>
+              <span class="blank"></span>
+              <button type="button" data-move="-40,0,0">◀</button>
+              <button type="button" class="btn-secondary" id="btn-ptz-stop">■</button>
+              <button type="button" data-move="40,0,0">▶</button>
+              <span class="blank"></span>
+              <button type="button" data-move="0,-40,0">▼</button>
+              <span class="blank"></span>
+            </div>
+            <div class="row">
+              <button type="button" class="btn btn-secondary" id="btn-zoom-out">Zoom −</button>
+              <button type="button" class="btn btn-secondary" id="btn-zoom-in">Zoom +</button>
+            </div>
+            <div class="row" style="margin-top: 0.5rem">
+              <button type="button" class="btn btn-secondary" id="btn-home">Home preset</button>
+              <button type="button" class="btn btn-secondary" id="btn-af-on">AF on</button>
+              <button type="button" class="btn btn-secondary" id="btn-af-off">AF off</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-stream" class="tab-panel">
+        <div class="panel">
+          <h2>YouTube Live</h2>
+          <p class="status-line">Uses camera default H.264 RTSP (not FishPond). YouTube RTMP requires H.264 + AAC.</p>
+          <label>Stream key (paste from YouTube Studio → Stream)</label>
+          <textarea id="yt-key" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
+          <div id="schedule-yt" class="schedule-block"></div>
+          <div class="row">
+            <button type="button" class="btn" id="btn-yt-save">Save</button>
+            <button type="button" class="btn" id="btn-yt-start">Start now</button>
+            <button type="button" class="btn btn-danger" id="btn-yt-stop">Stop</button>
+          </div>
+          <h2 style="margin-top: 1rem">Bandwidth (Starlink)</h2>
+          <p class="status-line" id="bw-text">—</p>
+          <div class="bar"><div id="bw-bar"></div></div>
+          <p class="status-line" id="yt-stderr"></p>
+        </div>
+      </section>
+
+      <section id="tab-rec" class="tab-panel">
+        <div class="panel">
+          <h2>Scheduled recordings</h2>
+          <label>Storage</label>
+          <select id="rec-storage">
+            <option value="auto">Auto (USB if mounted, else SD)</option>
+            <option value="usb">USB only</option>
+            <option value="sd">SD (/app/data) only</option>
+          </select>
+          <label>Stream profile (URL param)</label>
+          <input type="text" id="rec-profile" value="DefaultFishPond" />
+          <div id="schedule-rec" class="schedule-block"></div>
+          <div class="row">
+            <button type="button" class="btn" id="btn-rec-save">Save</button>
+            <button type="button" class="btn" id="btn-rec-start">Record now</button>
+            <button type="button" class="btn btn-danger" id="btn-rec-stop">Stop recording</button>
+          </div>
+          <p class="status-line" id="rec-status">—</p>
+          <h2 style="margin-top: 1rem">Files</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Size</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rec-files"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="tab-panel">
+        <div class="panel">
+          <h2>Camera</h2>
+          <div class="row">
+            <div>
+              <label>Host</label>
+              <input type="text" id="cam-host" />
+            </div>
+            <div>
+              <label>User</label>
+              <input type="text" id="cam-user" />
+            </div>
+            <div>
+              <label>Password</label>
+              <input type="password" id="cam-pass" />
+            </div>
+          </div>
+          <h2>Quota</h2>
+          <label>Monthly quota (GB, 0 = no bar cap)</label>
+          <input type="number" id="quota-gb" step="0.1" min="0" />
+          <label>Assumed overhead on top of ffmpeg counter (%)</label>
+          <input type="number" id="overhead-pct" step="0.5" min="0" max="50" />
+          <div class="row">
+            <button type="button" class="btn" id="btn-settings-save">Save settings</button>
+            <button type="button" class="btn btn-secondary" id="btn-bw-reset">Reset month bandwidth counter</button>
+            <button type="button" class="btn btn-secondary" id="btn-fishpond">Apply DefaultFishpond H.265 1080p15</button>
+          </div>
+          <p class="status-line">Month counter resets automatically at local midnight on the 1st (by calendar month sum).</p>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
