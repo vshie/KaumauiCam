@@ -90,7 +90,38 @@
           <p class="status-line">Uses camera default H.264 RTSP (not FishPond). YouTube RTMP requires H.264 + AAC.</p>
           <label>Stream key (paste from YouTube Studio → Stream)</label>
           <textarea id="yt-key" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
-          <div id="schedule-yt" class="schedule-block"></div>
+          <div id="schedule-yt" class="schedule-block">
+            <h3>Daily window & cycle</h3>
+            <p class="status-line">
+              Inside the window: every <b>interval</b> minutes, stream for the first <b>duration</b> minutes.
+            </p>
+            <div class="row">
+              <div>
+                <label for="yt-wstart">Window start</label>
+                <input type="time" id="yt-wstart" class="km-sched-inp" value="06:00" />
+              </div>
+              <div>
+                <label for="yt-wstop">Window stop</label>
+                <input type="time" id="yt-wstop" class="km-sched-inp" value="18:00" />
+              </div>
+            </div>
+            <div class="row row-sched">
+              <div>
+                <label for="yt-interval">Interval (min)</label>
+                <input type="number" id="yt-interval" class="km-sched-inp" min="1" value="60" />
+              </div>
+              <div>
+                <label for="yt-duration">Duration (min, on)</label>
+                <input type="number" id="yt-duration" class="km-sched-inp" min="0" value="20" />
+              </div>
+              <div class="sched-check-wrap">
+                <label class="sched-check-label" for="yt-en">
+                  <input type="checkbox" id="yt-en" class="km-sched-check" />
+                  Schedule on
+                </label>
+              </div>
+            </div>
+          </div>
           <div class="row">
             <button type="button" class="btn" id="btn-yt-save">Save</button>
             <button type="button" class="btn" id="btn-yt-start">Start now</button>
@@ -114,7 +145,38 @@
           </select>
           <label>Stream profile (URL param)</label>
           <input type="text" id="rec-profile" value="DefaultFishPond" />
-          <div id="schedule-rec" class="schedule-block"></div>
+          <div id="schedule-rec" class="schedule-block">
+            <h3>Daily window & cycle</h3>
+            <p class="status-line">
+              Inside the window: every <b>interval</b> minutes, record for the first <b>duration</b> minutes.
+            </p>
+            <div class="row">
+              <div>
+                <label for="rec-wstart">Window start</label>
+                <input type="time" id="rec-wstart" class="km-sched-inp" value="06:00" />
+              </div>
+              <div>
+                <label for="rec-wstop">Window stop</label>
+                <input type="time" id="rec-wstop" class="km-sched-inp" value="18:00" />
+              </div>
+            </div>
+            <div class="row row-sched">
+              <div>
+                <label for="rec-interval">Interval (min)</label>
+                <input type="number" id="rec-interval" class="km-sched-inp" min="1" value="60" />
+              </div>
+              <div>
+                <label for="rec-duration">Duration (min, on)</label>
+                <input type="number" id="rec-duration" class="km-sched-inp" min="0" value="30" />
+              </div>
+              <div class="sched-check-wrap">
+                <label class="sched-check-label" for="rec-en">
+                  <input type="checkbox" id="rec-en" class="km-sched-check" />
+                  Schedule on
+                </label>
+              </div>
+            </div>
+          </div>
           <div class="row">
             <button type="button" class="btn" id="btn-rec-save">Save</button>
             <button type="button" class="btn" id="btn-rec-start">Record now</button>

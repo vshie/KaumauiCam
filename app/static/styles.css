@@ -529,6 +529,43 @@ button.link-del:hover {
   font-weight: 600;
 }
 
+.row-sched {
+  align-items: flex-end;
+}
+
+.sched-check-wrap {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  padding-bottom: 0.5rem;
+}
+
+.sched-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  color: var(--muted);
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* Host/shell styles sometimes hide extension inputs; keep schedule controls visible. */
+.schedule-block .km-sched-inp,
+.schedule-block .km-sched-check {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+.schedule-block .km-sched-check {
+  display: inline-block !important;
+  width: auto !important;
+  margin: 0;
+  flex-shrink: 0;
+}
+
 /* Footer — light strip so dark-on-transparent partner marks stay readable */
 .site-footer {
   flex-shrink: 0;

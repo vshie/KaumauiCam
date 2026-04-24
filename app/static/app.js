@@ -8,26 +8,25 @@ function kmUrl(path) {
   return base + String(path || "").replace(/^\/+/, "");
 }
 
-function scheduleHtml(prefix, s) {
+/** Fill schedule fields (markup lives in index.html so UI works even if innerHTML is restricted). */
+function applySchedule(prefix, s) {
+  s = s || {};
   const ws = (s.window_start || "06:00").slice(0, 5);
   const we = (s.window_stop || "18:00").slice(0, 5);
-  return `
-    <h3>Daily window & cycle</h3>
-    <p class="status-line">Inside the window: every <b>interval</b> minutes, stream/record for the first <b>duration</b> minutes (same pattern as the other tab).</p>
-    <div class="row">
-      <div><label>Window start</label><input type="time" id="${prefix}-wstart" value="${ws}"></div>
-      <div><label>Window stop</label><input type="time" id="${prefix}-wstop" value="${we}"></div>
-    </div>
-    <div class="row">
-      <div><label>Interval (min)</label><input type="number" id="${prefix}-interval" min="1" value="${Number(s.interval_min) || 60}"></div>
-      <div><label>Duration (min, on)</label><input type="number" id="${prefix}-duration" min="0" value="${Number(s.duration_min) || 20}"></div>
-      <div style="flex: 0 0 auto; display: flex; align-items: flex-end; padding-bottom: 0.5rem">
-        <label style="display: flex; align-items: center; gap: 0.4rem; cursor: pointer; color: var(--muted); margin: 0">
-          <input type="checkbox" id="${prefix}-en" ${s.enabled ? "checked" : ""} /> Schedule on
-        </label>
-      </div>
-    </div>
-  `;
+  const defDur = prefix === "rec" ? 30 : 20;
+  const interval = s.interval_min != null && s.interval_min !== "" ? Number(s.interval_min) : 60;
+  let duration = s.duration_min != null && s.duration_min !== "" ? Number(s.duration_min) : defDur;
+  if (Number.isNaN(duration)) duration = defDur;
+  const a = document.getElementById(`${prefix}-wstart`);
+  const b = document.getElementById(`${prefix}-wstop`);
+  const iv = document.getElementById(`${prefix}-interval`);
+  const du = document.getElementById(`${prefix}-duration`);
+  const en = document.getElementById(`${prefix}-en`);
+  if (a) a.value = ws;
+  if (b) b.value = we;
+  if (iv) iv.value = String(Number.isNaN(interval) ? 60 : interval);
+  if (du) du.value = String(duration);
+  if (en) en.checked = Boolean(s.enabled);
 }
 
 function readSchedule(prefix) {
@@ -123,8 +122,8 @@ async function loadConfig() {
   $("overhead-pct").value = c.bandwidth_overhead_pct ?? 3;
   $("rec-storage").value = c.recordings_storage || "auto";
   $("rec-profile").value = c.recordings_profile || "DefaultFishPond";
-  $("schedule-yt").innerHTML = scheduleHtml("yt", c.youtube_schedule || {});
-  $("schedule-rec").innerHTML = scheduleHtml("rec", c.recordings_schedule || {});
+  applySchedule("yt", c.youtube_schedule || {});
+  applySchedule("rec", c.recordings_schedule || {});
 }
 
 async function pollPtz() {
@@ -228,6 +227,8 @@ async function initKaumauiCam() {
   } catch (e) {
     $("global-banner").className = "banner err";
     $("global-banner").textContent = "Failed to load config: " + e.message;
+    applySchedule("yt", {});
+    applySchedule("rec", {});
   }
 
   $("btn-webrtc-start").addEventListener("click", startWebRTC);
