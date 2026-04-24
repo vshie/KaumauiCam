@@ -18,6 +18,8 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 header {
   padding: 0.75rem 1rem;
@@ -56,6 +58,56 @@ main {
   padding: 1rem;
   max-width: 1200px;
   margin: 0 auto;
+  flex: 1 0 auto;
+  width: 100%;
+}
+
+/* Footer logos (transparent vector marks; swap for PNGs in /static/assets/ if needed) */
+.site-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem 0.65rem;
+  background: transparent;
+}
+.footer-logos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem 1.75rem;
+}
+.footer-logo {
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  text-decoration: none;
+  color: inherit;
+}
+.footer-img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-height: 26px;
+  object-fit: contain;
+  /* PNGs may include black matting; lighten blend drops solid black to transparent on dark UI */
+  mix-blend-mode: lighten;
+}
+.footer-img-br {
+  max-height: 22px;
+  /* BR mark uses true transparency; avoid washing out */
+  mix-blend-mode: normal;
+}
+.footer-img-hui {
+  max-height: 26px;
+  max-width: min(200px, 46vw);
+}
+.footer-logo:hover .footer-img {
+  opacity: 0.92;
+}
+.footer-logo:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 .tab-panel {
   display: none;

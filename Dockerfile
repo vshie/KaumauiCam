@@ -73,7 +73,7 @@ LABEL type="tool"
 ARG REPO
 ARG OWNER
 LABEL readme=''
-LABEL links='{"source":"https://github.com/vshie/BlueOS_KaumauiCam"}'
+LABEL links='{"source":"https://github.com/vshie/KaumauiCam"}'
 LABEL requirements="core >= 1.1"
 
 COPY entrypoint.sh /entrypoint.sh

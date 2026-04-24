@@ -25,10 +25,16 @@ From this directory:
 ```bash
 docker buildx build --platform linux/arm64 \
   -t vshie/kaumaui_cam:dev --load .
-docker save vshie/kaumaui_cam:dev | gzip > kaumaui_cam.tar.gz
+docker save vshie/kaumaui_cam:dev -o kaumaui_cam.tar
 ```
 
-Install **kaumaui_cam.tar.gz** from the BlueOS Extension Manager (“Load from file”).
+`docker save` always produces a **tar** archive; using the **`.tar`** extension matches that. Install **kaumaui_cam.tar** from the BlueOS Extension Manager (“Load from file”).
+
+Optional smaller file (gzip-wrapped tar, still loadable after decompress or wherever your UI accepts it):
+
+```bash
+docker save vshie/kaumaui_cam:dev | gzip > kaumaui_cam.tar.gz
+```
 
 For multi-arch without `--load`:
 
@@ -62,12 +68,14 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 ## Push this repo (you deploy)
 
+Repository: **https://github.com/vshie/KaumauiCam**
+
 ```bash
 git init
 git add .
 git commit -m "Initial Kaumaui Cam extension"
 git branch -M main
-git remote add origin git@github.com:vshie/BlueOS_KaumauiCam.git
+git remote add origin git@github.com:vshie/KaumauiCam.git
 git push -u origin main
 ```
 
