@@ -10,6 +10,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
     exfat-fuse \
     exfatprogs \
     ntfs-3g \
@@ -43,7 +47,10 @@ RUN mkdir -p /app/static/vendor/fonts && \
     curl -fsSL -o /app/static/vendor/fonts/dm-sans-600.woff2 \
       "https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5.2.5/files/dm-sans-latin-600-normal.woff2"
 
-RUN mkdir -p /app/data/recordings /app/data/in_progress
+RUN curl -fsSL -o /app/static/vendor/vue.global.prod.js \
+      "https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"
+
+RUN mkdir -p /app/data/recordings
 
 ENV FLASK_APP=main.py
 ENV PORT=6042

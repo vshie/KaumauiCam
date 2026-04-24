@@ -52,15 +52,33 @@ class YouTubeStreamer:
             self._session_start = time.time()
             self._stderr_lines = []
             out_url = f"{RTMP_BASE}/{stream_key.strip()}"
+            # Axis RTSP is usually video-only, and packets can arrive without
+            # PTS. FLV/RTMP requires monotonic PTS + an audio track, so we:
+            #   - force wall-clock timestamps on the RTSP input and regenerate
+            #     missing PTS (+genpts, +igndts) before stream copy,
+            #   - inject a silent AAC track as input 1 so YouTube sees audio,
+            #   - disable FLV's duration/filesize header rewrite (live stream).
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "warning",
+                "-fflags",
+                "+genpts+igndts+nobuffer",
+                "-use_wallclock_as_timestamps",
+                "1",
                 "-rtsp_transport",
                 "tcp",
                 "-i",
                 rtsp_url,
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
                 "-c:v",
                 "copy",
                 "-c:a",
@@ -71,8 +89,13 @@ class YouTubeStreamer:
                 "44100",
                 "-ac",
                 "2",
+                "-shortest",
+                "-max_muxing_queue_size",
+                "1024",
                 "-f",
                 "flv",
+                "-flvflags",
+                "no_duration_filesize",
                 "-progress",
                 "pipe:1",
                 "-nostats",

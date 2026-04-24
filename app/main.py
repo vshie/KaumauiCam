@@ -17,7 +17,7 @@ import config as cfgmod
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import Recorder
-from scheduler import cycle_should_be_on
+from scheduler import should_be_on
 from usb_storage import (
     get_free_mb,
     get_recording_dir_usb,
@@ -141,13 +141,7 @@ def _scheduler_loop() -> None:
 
             # YouTube desired
             ys = cfg["youtube_schedule"]
-            sched_yt = ys.get("enabled", False) and cycle_should_be_on(
-                now,
-                ys.get("window_start", "06:00"),
-                ys.get("window_stop", "18:00"),
-                int(ys.get("interval_min", 60)),
-                int(ys.get("duration_min", 20)),
-            )
+            sched_yt = ys.get("enabled", False) and should_be_on(now, ys)
             with _state_lock:
                 force = _youtube_force
             want_yt = force or sched_yt
@@ -165,13 +159,7 @@ def _scheduler_loop() -> None:
 
             # Recordings desired
             rs = cfg["recordings_schedule"]
-            sched_rec = rs.get("enabled", False) and cycle_should_be_on(
-                now,
-                rs.get("window_start", "06:00"),
-                rs.get("window_stop", "18:00"),
-                int(rs.get("interval_min", 60)),
-                int(rs.get("duration_min", 30)),
-            )
+            sched_rec = rs.get("enabled", False) and should_be_on(now, rs)
             with _state_lock:
                 rforce = _recording_force
             want_rec = rforce or sched_rec
@@ -296,7 +284,9 @@ def ptz_position():
     try:
         return jsonify(_camera().ptz_position())
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Camera offline is a normal operating state for this extension; return 503 and
+        # skip the stack trace so we don't fill the log on every poll.
+        return jsonify({"error": str(e), "offline": True}), 503
 
 
 @app.route("/api/ptz/move", methods=["POST"])
@@ -510,7 +500,7 @@ def rec_list():
     items = []
     if os.path.isdir(dest):
         for n in sorted(os.listdir(dest), reverse=True):
-            if n.endswith(".mp4"):
+            if n.endswith((".ts", ".mp4")):
                 p = os.path.join(dest, n)
                 try:
                     items.append({"name": n, "size": os.path.getsize(p), "mtime": os.path.getmtime(p)})

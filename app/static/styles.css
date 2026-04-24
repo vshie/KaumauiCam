@@ -67,16 +67,6 @@ body {
     linear-gradient(165deg, var(--bg-deep) 0%, var(--bg-mid) 45%, #07121c 100%);
 }
 
-/* Radio-driven tabs (first siblings in <body>); labels in header still toggle these via [for]. */
-.km-tab-input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  margin: 0;
-  pointer-events: none;
-}
-
 .site-header {
   position: relative;
   z-index: 50;
@@ -139,7 +129,7 @@ nav.tabs {
   border: 1px solid var(--border);
 }
 
-nav.tabs label {
+nav.tabs .tab-btn {
   display: inline-block;
   background: transparent;
   border: 1px solid transparent;
@@ -153,15 +143,12 @@ nav.tabs label {
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
-nav.tabs label:hover {
+nav.tabs .tab-btn:hover {
   color: var(--text);
   background: rgba(56, 189, 248, 0.08);
 }
 
-body:has(#km-tab-live:checked) nav.tabs label[for="km-tab-live"],
-body:has(#km-tab-stream:checked) nav.tabs label[for="km-tab-stream"],
-body:has(#km-tab-rec:checked) nav.tabs label[for="km-tab-rec"],
-body:has(#km-tab-settings:checked) nav.tabs label[for="km-tab-settings"] {
+nav.tabs .tab-btn.active {
   color: #042f2e;
   background: linear-gradient(135deg, var(--blue) 0%, var(--teal) 100%);
   border-color: rgba(255, 255, 255, 0.2);
@@ -178,16 +165,7 @@ main {
   width: 100%;
 }
 
-/* Tab panels: visibility from radio state (no JS). Strong selectors resist host CSS. */
 main .tab-panel {
-  display: none !important;
-}
-
-#km-tab-live:checked ~ main #tab-live,
-#km-tab-stream:checked ~ main #tab-stream,
-#km-tab-rec:checked ~ main #tab-rec,
-#km-tab-settings:checked ~ main #tab-settings {
-  display: block !important;
   animation: fadeIn 0.22s ease;
 }
 
@@ -529,17 +507,6 @@ button.link-del:hover {
   font-weight: 600;
 }
 
-.row-sched {
-  align-items: flex-end;
-}
-
-.sched-check-wrap {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: flex-end;
-  padding-bottom: 0.5rem;
-}
-
 .sched-check-label {
   display: flex;
   align-items: center;
@@ -551,19 +518,179 @@ button.link-del:hover {
   font-weight: 500;
 }
 
-/* Host/shell styles sometimes hide extension inputs; keep schedule controls visible. */
-.schedule-block .km-sched-inp,
-.schedule-block .km-sched-check {
-  display: block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
+.sched-top-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 0;
 }
 
-.schedule-block .km-sched-check {
-  display: inline-block !important;
-  width: auto !important;
+.sched-en-row {
+  margin: 0;
+}
+
+.sched-clear-btn {
+  padding: 0.38rem 0.85rem;
+  font-size: 0.82rem;
+}
+
+.sched-en-row input[type="checkbox"] {
+  width: auto;
   margin: 0;
   flex-shrink: 0;
+}
+
+.sched-sub {
+  margin: 1rem 0 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--blue);
+}
+
+/*
+  One 48-column grid containing both the ruler row (grid-row 1) and the cell row (grid-row 2).
+  Ruler hour headers span 4 columns each; their label sits over the LEFT edge of that block
+  with a small vertical tick that points to the first cell's left edge. The trailing 18:00
+  label is pinned to the right edge of the grid. Because ruler and cells share the exact same
+  column tracks and column-gap, the labels always align with the cell boundaries.
+*/
+.sched-grid {
+  display: grid;
+  grid-template-columns: repeat(48, minmax(3px, 1fr));
+  grid-template-rows: auto 1fr;
+  column-gap: 2px;
+  row-gap: 4px;
+  user-select: none;
+  touch-action: none;
+  padding: 0.5rem 0.55rem 0.65rem;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  position: relative;
+}
+
+.sched-ruler-hour {
+  grid-row: 1;
+  position: relative;
+  height: 1.35rem;
+}
+
+.sched-ruler-label {
+  position: absolute;
+  bottom: 0.18rem;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  padding: 0 2px;
+}
+
+.sched-ruler-tick {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 6px;
+  background: var(--border-strong);
+  display: block;
+}
+
+.sched-ruler-end {
+  grid-row: 1;
+  grid-column: 48 / -1;
+  position: relative;
+  height: 1.35rem;
+}
+
+.sched-ruler-end .sched-ruler-label,
+.sched-ruler-end .sched-ruler-tick {
+  left: auto;
+  right: 0;
+  transform: translateX(50%);
+}
+
+.sched-cell {
+  grid-row: 2;
+  aspect-ratio: 1 / 2.2;
+  min-height: 24px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  cursor: pointer;
+  transition: background 0.08s ease, border-color 0.08s ease;
+}
+
+.sched-cell.hour-start {
+  border-left: 2px solid rgba(45, 212, 191, 0.65);
+}
+
+.sched-cell:hover {
+  border-color: rgba(45, 212, 191, 0.7);
+}
+
+.sched-cell.on {
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.6) 0%, rgba(56, 189, 248, 0.38) 100%);
+  border-color: rgba(45, 212, 191, 0.75);
+}
+
+.sched-cell.on.hour-start {
+  border-left-color: rgba(125, 245, 220, 0.95);
+}
+
+.sched-table table {
+  font-size: 0.82rem;
+}
+
+.sched-day-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.day-pill {
+  border: 1px solid var(--border);
+  background: rgba(4, 16, 28, 0.65);
+  color: var(--muted);
+  padding: 0.38rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.day-pill:hover {
+  border-color: var(--teal);
+  color: var(--text);
+}
+
+.day-pill.active {
+  color: #042f2e;
+  background: linear-gradient(135deg, var(--blue-dim) 0%, var(--teal) 100%);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.hint {
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+@media (max-width: 560px) {
+  .sched-ruler-label {
+    font-size: 0.6rem;
+  }
+
+  .sched-cell {
+    min-height: 16px;
+  }
 }
 
 /* Footer — light strip so dark-on-transparent partner marks stay readable */

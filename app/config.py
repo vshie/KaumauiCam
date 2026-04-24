@@ -6,27 +6,25 @@ import json
 import os
 import threading
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any, Dict, List
+
+from scheduler import migrate_legacy_schedule
+
+_ALL_DAYS: List[str] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+DEFAULT_SCHEDULE: Dict[str, Any] = {
+    "enabled": False,
+    "days": list(_ALL_DAYS),
+    "slots": [],
+}
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "camera_host": "192.168.20.20",
     "camera_user": "root",
     "camera_pass": "campass",
     "youtube_stream_key": "",
-    "youtube_schedule": {
-        "enabled": False,
-        "window_start": "06:00",
-        "window_stop": "18:00",
-        "interval_min": 60,
-        "duration_min": 20,
-    },
-    "recordings_schedule": {
-        "enabled": False,
-        "window_start": "06:00",
-        "window_stop": "18:00",
-        "interval_min": 60,
-        "duration_min": 30,
-    },
+    "youtube_schedule": deepcopy(DEFAULT_SCHEDULE),
+    "recordings_schedule": deepcopy(DEFAULT_SCHEDULE),
     "recordings_storage": "auto",  # auto | usb | sd
     "recordings_profile": "DefaultFishPond",
     "monthly_quota_gb": 100.0,
@@ -55,13 +53,18 @@ def load() -> Dict[str, Any]:
             data = json.load(f)
         merged = deepcopy(DEFAULT_CONFIG)
         merged.update(data)
-        if "youtube_schedule" in data:
-            merged["youtube_schedule"] = {**DEFAULT_CONFIG["youtube_schedule"], **data["youtube_schedule"]}
-        if "recordings_schedule" in data:
-            merged["recordings_schedule"] = {
-                **DEFAULT_CONFIG["recordings_schedule"],
-                **data["recordings_schedule"],
-            }
+        if "youtube_schedule" in data and isinstance(data["youtube_schedule"], dict):
+            merged["youtube_schedule"] = migrate_legacy_schedule(
+                {**deepcopy(DEFAULT_SCHEDULE), **data["youtube_schedule"]}
+            )
+        else:
+            merged["youtube_schedule"] = migrate_legacy_schedule(deepcopy(merged["youtube_schedule"]))
+        if "recordings_schedule" in data and isinstance(data["recordings_schedule"], dict):
+            merged["recordings_schedule"] = migrate_legacy_schedule(
+                {**deepcopy(DEFAULT_SCHEDULE), **data["recordings_schedule"]}
+            )
+        else:
+            merged["recordings_schedule"] = migrate_legacy_schedule(deepcopy(merged["recordings_schedule"]))
         return merged
 
 
@@ -76,7 +79,8 @@ def update(partial: Dict[str, Any]) -> Dict[str, Any]:
     cfg = load()
     for k, v in partial.items():
         if k in ("youtube_schedule", "recordings_schedule") and isinstance(v, dict):
-            cfg[k] = {**cfg.get(k, {}), **v}
+            merged = {**cfg.get(k, {}), **v}
+            cfg[k] = migrate_legacy_schedule(merged)
         else:
             cfg[k] = v
     save(cfg)
