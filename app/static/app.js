@@ -198,13 +198,49 @@ async function pollStorage() {
 }
 
 function bindTabs() {
-  document.querySelectorAll("#tab-nav button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll("#tab-nav button").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
-      btn.classList.add("active");
-      $("tab-" + btn.dataset.tab).classList.add("active");
+  const nav = document.getElementById("tab-nav");
+  if (!nav || nav.dataset.kmTabsBound === "1") return;
+  nav.dataset.kmTabsBound = "1";
+
+  function activateTabFromButton(btn) {
+    const tab = btn && btn.dataset.tab;
+    if (!tab) return;
+    nav.querySelectorAll("button[data-tab]").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => {
+      p.classList.remove("active");
+      p.hidden = true;
     });
+    btn.classList.add("active");
+    const panel = document.getElementById("tab-" + tab);
+    if (panel) {
+      panel.hidden = false;
+      panel.classList.add("active");
+    }
+  }
+
+  /* Capture phase: run before any ancestor stops propagation (BlueOS / iframe shells). */
+  nav.addEventListener(
+    "click",
+    (ev) => {
+      const btn = ev.target.closest("button[data-tab]");
+      if (!btn || !nav.contains(btn)) return;
+      activateTabFromButton(btn);
+    },
+    true
+  );
+
+  /* Keyboard: left/right across tab buttons */
+  nav.addEventListener("keydown", (ev) => {
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
+    const tabs = Array.from(nav.querySelectorAll("button[data-tab]"));
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    ev.preventDefault();
+    const next = ev.key === "ArrowRight" ? tabs[Math.min(tabs.length - 1, i + 1)] : tabs[Math.max(0, i - 1)];
+    if (next) {
+      next.focus();
+      activateTabFromButton(next);
+    }
   });
 }
 
@@ -232,7 +268,7 @@ function bindPtzHold() {
   $("btn-af-off").addEventListener("click", () => api("POST", "/api/ptz/autofocus", { on: false }));
 }
 
-document.addEventListener("DOMContentLoaded", async () => {
+async function initKaumauiCam() {
   bindTabs();
   bindPtzHold();
   try {
@@ -244,14 +280,6 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("btn-webrtc-start").addEventListener("click", startWebRTC);
   $("btn-webrtc-stop").addEventListener("click", stopWebRTC);
-  $("btn-ensure-livepreview").addEventListener("click", async () => {
-    try {
-      const r = await api("POST", "/api/camera/ensure-livepreview", {});
-      alert(r.message || JSON.stringify(r));
-    } catch (e) {
-      alert(e.message);
-    }
-  });
 
   $("btn-yt-save").addEventListener("click", async () => {
     const ys = readSchedule("yt");
@@ -314,4 +342,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   pollStream();
   pollRec();
   pollStorage();
-});
+}
+
+/* app.js is injected at end of body; it often loads after DOMContentLoaded already fired. */
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => void initKaumauiCam());
+} else {
+  void initKaumauiCam();
+}

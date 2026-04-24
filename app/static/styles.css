@@ -68,6 +68,8 @@ body {
 }
 
 .site-header {
+  position: relative;
+  z-index: 50;
   padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -116,6 +118,8 @@ body {
 }
 
 nav.tabs {
+  position: relative;
+  z-index: 51;
   display: flex;
   gap: 0.35rem;
   flex-wrap: wrap;
@@ -151,6 +155,8 @@ nav.tabs button.active {
 }
 
 main {
+  position: relative;
+  z-index: 0;
   padding: 1.25rem;
   max-width: 1180px;
   margin: 0 auto;
@@ -158,13 +164,17 @@ main {
   width: 100%;
 }
 
+/* Host / parent styles can override plain display:none; hidden + !important keeps one panel visible. */
 .tab-panel {
-  display: none;
   animation: fadeIn 0.22s ease;
 }
 
-.tab-panel.active {
-  display: block;
+.tab-panel[hidden] {
+  display: none !important;
+}
+
+.tab-panel.active:not([hidden]) {
+  display: block !important;
 }
 
 @keyframes fadeIn {
@@ -505,12 +515,13 @@ button.link-del:hover {
   font-weight: 600;
 }
 
-/* Footer logos */
+/* Footer — light strip so dark-on-transparent partner marks stay readable */
 .site-footer {
   flex-shrink: 0;
-  border-top: 1px solid var(--border);
-  padding: 0.75rem 1rem 1rem;
-  background: rgba(4, 12, 20, 0.6);
+  border-top: 1px solid rgba(15, 23, 42, 0.12);
+  padding: 1rem 1.25rem 1.25rem;
+  background: #f8fafc;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.12);
 }
 
 .footer-logos {
@@ -518,7 +529,7 @@ button.link-del:hover {
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 1.25rem 1.75rem;
+  gap: 2rem 2.5rem;
 }
 
 .footer-logo {
@@ -526,35 +537,34 @@ button.link-del:hover {
   align-items: center;
   line-height: 0;
   text-decoration: none;
-  color: inherit;
+  color: #0f172a;
 }
 
 .footer-img {
   display: block;
   width: auto;
   height: auto;
-  max-height: 26px;
+  max-height: 48px;
   object-fit: contain;
-  mix-blend-mode: lighten;
-  opacity: 0.92;
-}
-
-.footer-img-br {
-  max-height: 22px;
   mix-blend-mode: normal;
-}
-
-.footer-img-hui {
-  max-height: 26px;
-  max-width: min(200px, 46vw);
-}
-
-.footer-logo:hover .footer-img {
   opacity: 1;
 }
 
+.footer-img-br {
+  max-height: 42px;
+}
+
+.footer-img-hui {
+  max-height: 48px;
+  max-width: min(320px, 85vw);
+}
+
+.footer-logo:hover .footer-img {
+  opacity: 0.88;
+}
+
 .footer-logo:focus-visible {
-  outline: 2px solid var(--teal);
-  outline-offset: 3px;
-  border-radius: 4px;
+  outline: 2px solid #0ea5e9;
+  outline-offset: 4px;
+  border-radius: 6px;
 }
