@@ -3,5 +3,6 @@ __pycache__/
 *.tar.gz
 *.tar
 .env
+.DS_Store
 .venv/
 *.db-journal
