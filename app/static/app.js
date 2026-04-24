@@ -2,6 +2,12 @@
 
 const $ = (id) => document.getElementById(id);
 
+/** Resolve paths for BlueOS extension subpaths (e.g. /extensionv2/kaumauicam/). */
+function kmUrl(path) {
+  const base = (typeof window.__KM_PREFIX === "string" ? window.__KM_PREFIX : "/").replace(/\/?$/, "/");
+  return base + String(path || "").replace(/^\/+/, "");
+}
+
 function scheduleHtml(prefix, s) {
   const ws = (s.window_start || "06:00").slice(0, 5);
   const we = (s.window_stop || "18:00").slice(0, 5);
@@ -58,7 +64,7 @@ async function startWebRTC() {
     };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const res = await fetch("/go2rtc/api/webrtc?src=livepreview", {
+    const res = await fetch(kmUrl("/go2rtc/api/webrtc?src=livepreview"), {
       method: "POST",
       body: pc.localDescription.sdp,
       headers: { "Content-Type": "application/sdp" },
@@ -97,7 +103,7 @@ async function api(method, path, body) {
     opt.headers["Content-Type"] = "application/json";
     opt.body = JSON.stringify(body);
   }
-  const r = await fetch(path, opt);
+  const r = await fetch(kmUrl(path), opt);
   const t = await r.text();
   let j = null;
   try {
@@ -164,7 +170,7 @@ async function pollRec() {
     tb.innerHTML = "";
     for (const f of list.files || []) {
       const tr = document.createElement("tr");
-      tr.innerHTML = `<td>${f.name}</td><td>${fmtBytes(f.size)}</td><td><a href="/api/recordings/download/${encodeURIComponent(f.name)}">Download</a> · <button type="button" class="link-del" data-name="${f.name}">Delete</button></td>`;
+      tr.innerHTML = `<td>${f.name}</td><td>${fmtBytes(f.size)}</td><td><a href="${kmUrl("/api/recordings/download/" + encodeURIComponent(f.name))}">Download</a> · <button type="button" class="link-del" data-name="${f.name}">Delete</button></td>`;
       tb.appendChild(tr);
     }
     tb.querySelectorAll(".link-del").forEach((btn) => {

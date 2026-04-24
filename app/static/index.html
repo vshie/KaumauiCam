@@ -3,13 +3,30 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a1628" />
     <title>Kaumaui Cam</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <script>
+      (function () {
+        var p = location.pathname;
+        if (p !== "/" && !p.endsWith("/")) p += "/";
+        window.__KM_PREFIX = p;
+      })();
+    </script>
+    <link rel="stylesheet" href="" id="km-css" />
+    <script>
+      document.getElementById("km-css").href = window.__KM_PREFIX + "static/styles.css";
+    </script>
   </head>
   <body>
-    <header>
-      <h1>Kaumaui Cam</h1>
-      <nav class="tabs" id="tab-nav">
+    <header class="site-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-text">
+          <h1>Kaumaui Cam</h1>
+          <p class="tagline">Live view · PTZ · stream & record</p>
+        </div>
+      </div>
+      <nav class="tabs" id="tab-nav" aria-label="Main">
         <button type="button" data-tab="live" class="active">Live</button>
         <button type="button" data-tab="stream">Streaming</button>
         <button type="button" data-tab="rec">Recordings</button>
@@ -21,12 +38,12 @@
 
       <section id="tab-live" class="tab-panel active">
         <div class="grid grid-2">
-          <div class="panel">
-            <h2>Preview (WebRTC · livepreview)</h2>
+          <div class="panel panel-accent">
+            <h2>Preview <span class="badge">WebRTC · livepreview</span></h2>
             <div class="video-wrap">
               <video id="live-video" playsinline autoplay muted></video>
             </div>
-            <div class="row" style="margin-top: 0.75rem">
+            <div class="row row-actions">
               <button type="button" class="btn btn-secondary" id="btn-webrtc-start">Connect video</button>
               <button type="button" class="btn btn-secondary" id="btn-webrtc-stop">Disconnect</button>
               <button type="button" class="btn btn-secondary" id="btn-ensure-livepreview">Create livepreview profile</button>
@@ -38,20 +55,20 @@
             <p class="status-line" id="ptz-readout">—</p>
             <div class="ptz-pad">
               <span class="blank"></span>
-              <button type="button" data-move="0,40,0">▲</button>
+              <button type="button" class="ptz-dir" data-move="0,40,0" aria-label="Tilt up">▲</button>
               <span class="blank"></span>
-              <button type="button" data-move="-40,0,0">◀</button>
-              <button type="button" class="btn-secondary" id="btn-ptz-stop">■</button>
-              <button type="button" data-move="40,0,0">▶</button>
+              <button type="button" class="ptz-dir" data-move="-40,0,0" aria-label="Pan left">◀</button>
+              <button type="button" class="btn-secondary ptz-stop" id="btn-ptz-stop" aria-label="Stop">■</button>
+              <button type="button" class="ptz-dir" data-move="40,0,0" aria-label="Pan right">▶</button>
               <span class="blank"></span>
-              <button type="button" data-move="0,-40,0">▼</button>
+              <button type="button" class="ptz-dir" data-move="0,-40,0" aria-label="Tilt down">▼</button>
               <span class="blank"></span>
             </div>
             <div class="row">
               <button type="button" class="btn btn-secondary" id="btn-zoom-out">Zoom −</button>
               <button type="button" class="btn btn-secondary" id="btn-zoom-in">Zoom +</button>
             </div>
-            <div class="row" style="margin-top: 0.5rem">
+            <div class="row row-actions">
               <button type="button" class="btn btn-secondary" id="btn-home">Home preset</button>
               <button type="button" class="btn btn-secondary" id="btn-af-on">AF on</button>
               <button type="button" class="btn btn-secondary" id="btn-af-off">AF off</button>
@@ -72,7 +89,7 @@
             <button type="button" class="btn" id="btn-yt-start">Start now</button>
             <button type="button" class="btn btn-danger" id="btn-yt-stop">Stop</button>
           </div>
-          <h2 style="margin-top: 1rem">Bandwidth (Starlink)</h2>
+          <h2 class="h2-spaced">Bandwidth <span class="badge badge-muted">Starlink</span></h2>
           <p class="status-line" id="bw-text">—</p>
           <div class="bar"><div id="bw-bar"></div></div>
           <p class="status-line" id="yt-stderr"></p>
@@ -97,17 +114,19 @@
             <button type="button" class="btn btn-danger" id="btn-rec-stop">Stop recording</button>
           </div>
           <p class="status-line" id="rec-status">—</p>
-          <h2 style="margin-top: 1rem">Files</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Size</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="rec-files"></tbody>
-          </table>
+          <h2 class="h2-spaced">Files</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Size</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="rec-files"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -128,7 +147,7 @@
               <input type="password" id="cam-pass" />
             </div>
           </div>
-          <h2>Quota</h2>
+          <h2 class="h2-spaced">Quota</h2>
           <label>Monthly quota (GB, 0 = no bar cap)</label>
           <input type="number" id="quota-gb" step="0.1" min="0" />
           <label>Assumed overhead on top of ffmpeg counter (%)</label>
@@ -146,7 +165,8 @@
       <div class="footer-logos">
         <span class="footer-logo" title="HuiHoʻoleimaluō">
           <img
-            src="/static/assets/hui_logo.png"
+            id="km-img-hui"
+            src=""
             alt="HuiHoʻoleimaluō"
             class="footer-img footer-img-hui"
             width="200"
@@ -163,7 +183,8 @@
           title="Blue Robotics"
         >
           <img
-            src="/static/assets/blue_robotics_logo.png"
+            id="km-img-br"
+            src=""
             alt="Blue Robotics"
             class="footer-img footer-img-br"
             width="180"
@@ -174,6 +195,21 @@
         </a>
       </div>
     </footer>
-    <script src="/static/app.js"></script>
+    <script>
+      (function () {
+        function u(s) {
+          var b = (window.__KM_PREFIX || "/").replace(/\/?$/, "/");
+          return b + s.replace(/^\//, "");
+        }
+        var hi = document.getElementById("km-img-hui");
+        var br = document.getElementById("km-img-br");
+        if (hi) hi.src = u("static/assets/hui_logo.png");
+        if (br) br.src = u("static/assets/blue_robotics_logo.png");
+      })();
+    </script>
+    <script src="" id="km-js"></script>
+    <script>
+      document.getElementById("km-js").src = window.__KM_PREFIX + "static/app.js";
+    </script>
   </body>
 </html>

@@ -34,6 +34,15 @@ RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 COPY app/ /app/
 
+# Offline UI fonts (no Google Fonts at runtime).
+RUN mkdir -p /app/static/vendor/fonts && \
+    curl -fsSL -o /app/static/vendor/fonts/dm-sans-400.woff2 \
+      "https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5.2.5/files/dm-sans-latin-400-normal.woff2" && \
+    curl -fsSL -o /app/static/vendor/fonts/dm-sans-500.woff2 \
+      "https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5.2.5/files/dm-sans-latin-500-normal.woff2" && \
+    curl -fsSL -o /app/static/vendor/fonts/dm-sans-600.woff2 \
+      "https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5.2.5/files/dm-sans-latin-600-normal.woff2"
+
 RUN mkdir -p /app/data/recordings /app/data/in_progress
 
 ENV FLASK_APP=main.py
