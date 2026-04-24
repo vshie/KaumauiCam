@@ -45,7 +45,7 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 ## Runtime (BlueOS)
 
-- **HTTP UI:** port **6030** (host network).
+- **HTTP UI:** port **6042** by default (host network; `PORT` env overrides). If busy, the app scans **6040–6060**.
 - **WebRTC (go2rtc):** **8555/tcp+udp** on the host (advertised in the extension `permissions` label).
 - **Data / SQLite / recordings fallback:** host bind  
   `/usr/blueos/extensions/kaumauicam` → `/app/data`

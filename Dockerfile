@@ -37,14 +37,15 @@ COPY app/ /app/
 RUN mkdir -p /app/data/recordings /app/data/in_progress
 
 ENV FLASK_APP=main.py
-EXPOSE 6030
+ENV PORT=6042
+EXPOSE 6042
 EXPOSE 8555
 
 ARG IMAGE_NAME
 LABEL permissions='\
 {\
  "ExposedPorts": {\
-  "6030/tcp": {},\
+  "6042/tcp": {},\
   "8555/tcp": {},\
   "8555/udp": {}\
  },\
@@ -57,7 +58,7 @@ LABEL permissions='\
   "NetworkMode": "host",\
   "Privileged": true,\
   "PortBindings": {\
-   "6030/tcp": [{"HostPort": ""}]\
+   "6042/tcp": [{"HostPort": ""}]\
   }\
  }\
 }'

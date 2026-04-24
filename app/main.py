@@ -107,15 +107,27 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
+_EXTENSION_VERSION = "0.2.0"
+
+
 def _parse_listen_port() -> int:
-    raw = os.environ.get("PORT", "6030")
+    raw = os.environ.get("PORT", "6042")
     try:
-        p = int(str(raw).strip() or "6030")
+        p = int(str(raw).strip() or "6042")
     except ValueError:
-        return 6030
+        return 6042
     if not (1 <= p <= 65535):
-        return 6030
+        return 6042
     return p
+
+
+def _listen_ports_to_try() -> list[int]:
+    preferred = _parse_listen_port()
+    out = [preferred]
+    for x in range(6040, 6061):
+        if x != preferred:
+            out.append(x)
+    return out
 
 
 def _scheduler_loop() -> None:
@@ -193,6 +205,24 @@ def _scheduler_loop() -> None:
 @app.route("/")
 def index():
     return send_from_directory(STATIC_DIR, "index.html")
+
+
+@app.route("/register_service")
+def register_service():
+    """BlueOS helper: sidebar entry + metadata (GET)."""
+    return jsonify(
+        {
+            "name": "Kaumaui Cam",
+            "description": "Axis live view, PTZ, YouTube Live scheduling, and local recordings.",
+            "icon": "mdi-fish",
+            "company": "Blue Robotics",
+            "version": _EXTENSION_VERSION,
+            "webpage": "https://github.com/vshie/KaumauiCam",
+            "api": "https://github.com/vshie/KaumauiCam",
+            "new_page": False,
+            "works_in_relative_paths": True,
+        }
+    )
 
 
 @app.route("/go2rtc/<path:path>", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
@@ -539,9 +569,21 @@ def main() -> None:
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()
-    port = _parse_listen_port()
-    logger.info("Listening on 0.0.0.0:%s", port)
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    last_err: OSError | None = None
+    for port in _listen_ports_to_try():
+        try:
+            logger.info("Listening on 0.0.0.0:%s", port)
+            app.run(host="0.0.0.0", port=port, threaded=True)
+            return
+        except OSError as e:
+            last_err = e
+            errno = getattr(e, "errno", None)
+            if errno in (48, 98) or "Address already in use" in str(e):
+                logger.warning("Bind failed on port %s: %s", port, e)
+                continue
+            raise
+    logger.error("No free port in scan range; last error: %s", last_err)
+    raise SystemExit(1) from last_err
 
 
 if __name__ == "__main__":
