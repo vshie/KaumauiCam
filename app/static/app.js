@@ -197,53 +197,6 @@ async function pollStorage() {
   } catch (_) {}
 }
 
-function bindTabs() {
-  const nav = document.getElementById("tab-nav");
-  if (!nav || nav.dataset.kmTabsBound === "1") return;
-  nav.dataset.kmTabsBound = "1";
-
-  function activateTabFromButton(btn) {
-    const tab = btn && btn.dataset.tab;
-    if (!tab) return;
-    nav.querySelectorAll("button[data-tab]").forEach((b) => b.classList.remove("active"));
-    document.querySelectorAll(".tab-panel").forEach((p) => {
-      p.classList.remove("active");
-      p.hidden = true;
-    });
-    btn.classList.add("active");
-    const panel = document.getElementById("tab-" + tab);
-    if (panel) {
-      panel.hidden = false;
-      panel.classList.add("active");
-    }
-  }
-
-  /* Capture phase: run before any ancestor stops propagation (BlueOS / iframe shells). */
-  nav.addEventListener(
-    "click",
-    (ev) => {
-      const btn = ev.target.closest("button[data-tab]");
-      if (!btn || !nav.contains(btn)) return;
-      activateTabFromButton(btn);
-    },
-    true
-  );
-
-  /* Keyboard: left/right across tab buttons */
-  nav.addEventListener("keydown", (ev) => {
-    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
-    const tabs = Array.from(nav.querySelectorAll("button[data-tab]"));
-    const i = tabs.indexOf(document.activeElement);
-    if (i < 0) return;
-    ev.preventDefault();
-    const next = ev.key === "ArrowRight" ? tabs[Math.min(tabs.length - 1, i + 1)] : tabs[Math.max(0, i - 1)];
-    if (next) {
-      next.focus();
-      activateTabFromButton(next);
-    }
-  });
-}
-
 function bindPtzHold() {
   document.querySelectorAll("[data-move]").forEach((btn) => {
     const [pan, tilt, zoom] = btn.dataset.move.split(",").map(Number);
@@ -269,7 +222,6 @@ function bindPtzHold() {
 }
 
 async function initKaumauiCam() {
-  bindTabs();
   bindPtzHold();
   try {
     await loadConfig();

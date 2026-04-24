@@ -67,6 +67,16 @@ body {
     linear-gradient(165deg, var(--bg-deep) 0%, var(--bg-mid) 45%, #07121c 100%);
 }
 
+/* Radio-driven tabs (first siblings in <body>); labels in header still toggle these via [for]. */
+.km-tab-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
 .site-header {
   position: relative;
   z-index: 50;
@@ -129,7 +139,8 @@ nav.tabs {
   border: 1px solid var(--border);
 }
 
-nav.tabs button {
+nav.tabs label {
+  display: inline-block;
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
@@ -142,12 +153,15 @@ nav.tabs button {
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
-nav.tabs button:hover {
+nav.tabs label:hover {
   color: var(--text);
   background: rgba(56, 189, 248, 0.08);
 }
 
-nav.tabs button.active {
+body:has(#km-tab-live:checked) nav.tabs label[for="km-tab-live"],
+body:has(#km-tab-stream:checked) nav.tabs label[for="km-tab-stream"],
+body:has(#km-tab-rec:checked) nav.tabs label[for="km-tab-rec"],
+body:has(#km-tab-settings:checked) nav.tabs label[for="km-tab-settings"] {
   color: #042f2e;
   background: linear-gradient(135deg, var(--blue) 0%, var(--teal) 100%);
   border-color: rgba(255, 255, 255, 0.2);
@@ -164,17 +178,17 @@ main {
   width: 100%;
 }
 
-/* Host / parent styles can override plain display:none; hidden + !important keeps one panel visible. */
-.tab-panel {
-  animation: fadeIn 0.22s ease;
-}
-
-.tab-panel[hidden] {
+/* Tab panels: visibility from radio state (no JS). Strong selectors resist host CSS. */
+main .tab-panel {
   display: none !important;
 }
 
-.tab-panel.active:not([hidden]) {
+#km-tab-live:checked ~ main #tab-live,
+#km-tab-stream:checked ~ main #tab-stream,
+#km-tab-rec:checked ~ main #tab-rec,
+#km-tab-settings:checked ~ main #tab-settings {
   display: block !important;
+  animation: fadeIn 0.22s ease;
 }
 
 @keyframes fadeIn {

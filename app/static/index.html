@@ -18,6 +18,14 @@
     </script>
   </head>
   <body>
+    <!--
+      Native radio + label tabs (no JS). Survives BlueOS parent shells / timing where
+      external app.js might not attach click handlers reliably (cf. BR_exploreHD_DVR inline Vue).
+    -->
+    <input type="radio" name="km-tab" id="km-tab-live" class="km-tab-input" checked tabindex="-1" />
+    <input type="radio" name="km-tab" id="km-tab-stream" class="km-tab-input" tabindex="-1" />
+    <input type="radio" name="km-tab" id="km-tab-rec" class="km-tab-input" tabindex="-1" />
+    <input type="radio" name="km-tab" id="km-tab-settings" class="km-tab-input" tabindex="-1" />
     <header class="site-header">
       <div class="brand">
         <span class="brand-mark" aria-hidden="true"></span>
@@ -27,16 +35,16 @@
         </div>
       </div>
       <nav class="tabs" id="tab-nav" aria-label="Main">
-        <button type="button" data-tab="live" class="active">Live</button>
-        <button type="button" data-tab="stream">Streaming</button>
-        <button type="button" data-tab="rec">Recordings</button>
-        <button type="button" data-tab="settings">Settings</button>
+        <label for="km-tab-live">Live</label>
+        <label for="km-tab-stream">Streaming</label>
+        <label for="km-tab-rec">Recordings</label>
+        <label for="km-tab-settings">Settings</label>
       </nav>
     </header>
     <main>
       <div id="global-banner"></div>
 
-      <section id="tab-live" class="tab-panel active">
+      <section id="tab-live" class="tab-panel">
         <div class="grid grid-2">
           <div class="panel panel-accent">
             <h2>Preview <span class="badge">WebRTC · livepreview</span></h2>
@@ -76,7 +84,7 @@
         </div>
       </section>
 
-      <section id="tab-stream" class="tab-panel" hidden>
+      <section id="tab-stream" class="tab-panel">
         <div class="panel">
           <h2>YouTube Live</h2>
           <p class="status-line">Uses camera default H.264 RTSP (not FishPond). YouTube RTMP requires H.264 + AAC.</p>
@@ -95,7 +103,7 @@
         </div>
       </section>
 
-      <section id="tab-rec" class="tab-panel" hidden>
+      <section id="tab-rec" class="tab-panel">
         <div class="panel">
           <h2>Scheduled recordings</h2>
           <label>Storage</label>
@@ -129,7 +137,7 @@
         </div>
       </section>
 
-      <section id="tab-settings" class="tab-panel" hidden>
+      <section id="tab-settings" class="tab-panel">
         <div class="panel">
           <h2>Camera</h2>
           <div class="row">
