@@ -18,22 +18,6 @@ Repository variables (example names from workflow):
 
 On **push**, the workflow builds **linux/arm64** and **linux/arm/v7** and publishes the extension image.
 
-## After each code change: local `.tar` + `git push`
-
-The image tar is built **on your machine** (not in GitHub Actions). **`kaumaui_cam.tar`** is gitignored and stays local for BlueOS “Load from file”.
-
-```bash
-git add -A && git commit -m "your message"   # when you have changes to commit
-chmod +x scripts/build-tar-and-push.sh
-./scripts/build-tar-and-push.sh              # build arm64 tar + git push current branch
-```
-
-Override image tag or output path if needed:
-
-```bash
-IMAGE=vshie/kaumaui_cam:dev OUT=kaumaui_cam.tar ./scripts/build-tar-and-push.sh
-```
-
 ## Local image / tar (manual install on Pi)
 
 From this directory:
