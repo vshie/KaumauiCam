@@ -88,6 +88,7 @@ def _can_start_recording(cfg: Dict[str, Any], dest_dir: str, label: str) -> Tupl
 
 
 def _apply_boot() -> None:
+    """Camera / go2rtc setup; may block on HTTP — run from a daemon thread only."""
     global _boot_applied
     if _boot_applied:
         return
@@ -104,6 +105,17 @@ def _apply_boot() -> None:
         go2rtc_sup.start()
     except Exception as e:
         logger.warning("boot go2rtc: %s", e)
+
+
+def _parse_listen_port() -> int:
+    raw = os.environ.get("PORT", "6030")
+    try:
+        p = int(str(raw).strip() or "6030")
+    except ValueError:
+        return 6030
+    if not (1 <= p <= 65535):
+        return 6030
+    return p
 
 
 def _scheduler_loop() -> None:
@@ -511,12 +523,24 @@ def rec_download(name: str):
 
 
 def main() -> None:
-    bandwidth.init_db()
-    cfgmod.load()
-    start_probe()
+    logger.info("Kaumaui Cam starting (camera may be offline; UI comes up first)")
+    try:
+        bandwidth.init_db()
+    except Exception:
+        logger.exception("bandwidth.init_db failed")
+    try:
+        cfgmod.load()
+    except Exception:
+        logger.exception("config load failed")
+    try:
+        start_probe()
+    except Exception:
+        logger.exception("USB probe start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
-    _apply_boot()
-    port = int(os.environ.get("PORT", "6030"))
+    # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
+    threading.Thread(target=_apply_boot, daemon=True, name="boot").start()
+    port = _parse_listen_port()
+    logger.info("Listening on 0.0.0.0:%s", port)
     app.run(host="0.0.0.0", port=port, threaded=True)
 
 

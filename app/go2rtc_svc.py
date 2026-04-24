@@ -42,19 +42,20 @@ class Go2RtcSupervisor:
                 if not os.path.isfile(CONFIG_PATH):
                     time.sleep(1)
                     continue
+                # Do not use PIPE for stderr: go2rtc can be very chatty when RTSP is down;
+                # an unread PIPE fills (~64KiB) and blocks the child.
                 self._proc = subprocess.Popen(
                     [GO2RTC_BIN, "-config", CONFIG_PATH],
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
                 )
                 logger.info("go2rtc started pid=%s", self._proc.pid)
                 backoff = 1.0
                 while self._proc.poll() is None and not self._stop.is_set():
                     time.sleep(0.5)
-                if self._proc.poll() is not None and self._proc.stderr:
-                    err = self._proc.stderr.read().decode(errors="replace")[:500]
-                    logger.warning("go2rtc exited code=%s err=%s", self._proc.returncode, err)
+                if self._proc.poll() is not None:
+                    logger.warning("go2rtc exited code=%s", self._proc.returncode)
             except Exception as e:
                 logger.error("go2rtc supervisor: %s", e)
             finally:
