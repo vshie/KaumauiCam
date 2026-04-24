@@ -546,8 +546,11 @@ button.link-del:hover {
   height: auto;
   max-height: 48px;
   object-fit: contain;
+  background: transparent;
   mix-blend-mode: normal;
   opacity: 1;
+  /* Avoid subpixel / filter quirks that can show fringe patterns on transparent PNGs */
+  image-rendering: auto;
 }
 
 .footer-img-br {
