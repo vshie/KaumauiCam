@@ -21,15 +21,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 ARG GO2RTC_VERSION=1.9.9
-ARG TARGETARCH=arm64
+# `TARGETARCH` / `TARGETVARIANT` are auto-populated by buildx for multi-platform
+# builds. Redeclare them WITHOUT a default — providing a default disables the
+# auto-population in some buildx versions and was previously baking the arm64
+# go2rtc binary into the linux/arm/v7 image (causing "Exec format error" on
+# 32-bit Pis). We also fall back to `dpkg --print-architecture` when run via a
+# plain `docker build`, which always reflects the running platform (the build
+# RUN executes under QEMU emulation for the target arch, so dpkg returns the
+# target's view).
+ARG TARGETARCH
+ARG TARGETVARIANT
 RUN set -eux; \
-    case "$TARGETARCH" in \
-      arm64) G2BIN="go2rtc_linux_arm64" ;; \
-      arm) G2BIN="go2rtc_linux_arm" ;; \
-      *) echo "Unsupported TARGETARCH=$TARGETARCH"; exit 1 ;; \
+    arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+    case "$arch" in \
+      arm64)            G2BIN="go2rtc_linux_arm64" ;; \
+      arm|armhf|armel)  G2BIN="go2rtc_linux_arm" ;; \
+      amd64)            G2BIN="go2rtc_linux_amd64" ;; \
+      *) echo "Unsupported arch='$arch' (TARGETARCH='$TARGETARCH' TARGETVARIANT='$TARGETVARIANT' dpkg='$(dpkg --print-architecture)')"; exit 1 ;; \
     esac; \
+    echo "go2rtc: downloading $G2BIN for arch=$arch variant='${TARGETVARIANT:-}'"; \
     curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/${G2BIN}" -o /usr/local/bin/go2rtc; \
-    chmod +x /usr/local/bin/go2rtc
+    chmod +x /usr/local/bin/go2rtc; \
+    # Fail the build if we somehow shipped the wrong-arch binary: attempting to
+    # exec it under the target's QEMU will return ENOEXEC ("Exec format error").
+    /usr/local/bin/go2rtc -version 2>&1 | head -3
 
 WORKDIR /app
 
