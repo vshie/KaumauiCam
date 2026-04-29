@@ -49,12 +49,16 @@ def init_db() -> None:
             # so the UI can show the actual broadcast history (when a session
             # started, how long it lasted, why it ended, how many bytes went
             # out) instead of just per-tick byte deltas. `end_reason` is one of:
-            #   "stopped"  -- explicit stop() call (schedule end / user click)
-            #   "died"     -- ffmpeg exited on its own (network drop, RTSP
-            #                 hiccup, RTMP push refused). exit_code captures
-            #                 ffmpeg's return code; last_stderr captures the
-            #                 final ~5 lines of ffmpeg stderr for diagnosis.
-            #   NULL       -- session is still running.
+            #   "stopped"   -- explicit stop() call (schedule end / user click)
+            #   "stalled"   -- watchdog killed a wedged ffmpeg (no RTMP bytes)
+            #   "died"      -- ffmpeg exited on its own (network drop, RTSP
+            #                  hiccup, RTMP push refused). exit_code captures
+            #                  ffmpeg's return code; last_stderr captures the
+            #                  final ~5 lines of ffmpeg stderr for diagnosis.
+            #   "orphaned"  -- ended_ts was NULL at process boot, meaning the
+            #                  prior Python interpreter died before recording
+            #                  a clean end_reason. See reconciliation below.
+            #   NULL        -- session is currently running (single row max).
             c.execute(
                 """
                 CREATE TABLE IF NOT EXISTS yt_sessions (
@@ -71,6 +75,39 @@ def init_db() -> None:
             c.execute(
                 "CREATE INDEX IF NOT EXISTS yt_sessions_started_idx ON yt_sessions(started_ts DESC)"
             )
+            # Boot-time reconciliation. If we see any rows with ended_ts NULL,
+            # they're orphans from a previous interpreter that died before
+            # firing a session-end event (container kill / OOM / SIGKILL).
+            # The current process is starting fresh so by definition none of
+            # those ffmpegs are still running. Close them out with
+            # end_reason="orphaned" and roll up their bytes from the per-tick
+            # bandwidth table so the broadcast-history UI doesn't show them
+            # as still-Running indefinitely.
+            now = time.time()
+            orphans = c.execute(
+                "SELECT session_id, started_ts FROM yt_sessions WHERE ended_ts IS NULL"
+            ).fetchall()
+            for row in orphans:
+                sid = row[0]
+                started = float(row[1] or now)
+                bytes_row = c.execute(
+                    "SELECT COALESCE(SUM(bytes), 0) FROM bandwidth WHERE session_id = ?",
+                    (sid,),
+                ).fetchone()
+                total_bytes = int(bytes_row[0]) if bytes_row else 0
+                # Use the last bandwidth tick as a better ended_ts estimate
+                # than "now": for an old crashed session, "now" could be
+                # weeks later and would inflate the displayed duration.
+                last_tick = c.execute(
+                    "SELECT COALESCE(MAX(ts), ?) FROM bandwidth WHERE session_id = ?",
+                    (started, sid),
+                ).fetchone()
+                ended_ts = float(last_tick[0]) if last_tick and last_tick[0] else started
+                c.execute(
+                    "UPDATE yt_sessions SET ended_ts = ?, bytes = ?, end_reason = ? "
+                    "WHERE session_id = ? AND ended_ts IS NULL",
+                    (ended_ts, total_bytes, "orphaned", sid),
+                )
             c.commit()
         finally:
             c.close()

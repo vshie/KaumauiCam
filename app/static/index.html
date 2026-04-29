@@ -558,6 +558,7 @@
                 bwBarPct: 0,
                 ytStderr: "Idle.",
                 streamSessions: [],
+                liveSessionId: null,
                 recStatusLine: "—",
                 recFiles: [],
                 pc: null,
@@ -657,6 +658,7 @@
                     self.bwText = line;
                     if (s.running) self.ytStderr = "Streaming · session " + self.fmtBytes(s.session_bytes || 0);
                     else self.ytStderr = ((s.stderr_tail || []).slice(-5).join(" | ") || "Idle.");
+                    self.liveSessionId = (s.running && s.session_id) ? s.session_id : null;
                   })
                   .catch(function () {});
                 this.api("GET", "/api/stream/sessions?limit=50")
@@ -664,6 +666,9 @@
                     self.streamSessions = (r && r.sessions) || [];
                   })
                   .catch(function () {});
+              },
+              isSessionLive: function (s) {
+                return !s.ended_ts && this.liveSessionId && s.session_id === this.liveSessionId;
               },
               formatHonoluluTs: function (ts) {
                 if (!ts) return "—";
@@ -681,10 +686,13 @@
                 return h + "h " + (m % 60) + "m";
               },
               formatSessionOutcome: function (s) {
-                if (!s.ended_ts) return "Running";
+                if (!s.ended_ts) {
+                  return this.isSessionLive(s) ? "Running" : "Ended (unknown)";
+                }
                 var reason = s.end_reason || "ended";
                 if (reason === "stopped") return "Stopped (clean)";
                 if (reason === "stalled") return "Restarted (stalled)";
+                if (reason === "orphaned") return "Ended (orphaned)";
                 if (reason === "died") {
                   var rc = (s.exit_code === null || s.exit_code === undefined) ? "?" : s.exit_code;
                   return "Crashed (rc=" + rc + ")";
@@ -692,7 +700,9 @@
                 return reason;
               },
               sessionRowClass: function (s) {
-                if (!s.ended_ts) return "sess-running";
+                if (!s.ended_ts) {
+                  return this.isSessionLive(s) ? "sess-running" : "sess-stopped";
+                }
                 if (s.end_reason === "died") return "sess-died";
                 if (s.end_reason === "stalled") return "sess-stalled";
                 return "sess-stopped";
