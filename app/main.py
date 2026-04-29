@@ -17,7 +17,7 @@ import config as cfgmod
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import Recorder
-from scheduler import should_be_on
+from scheduler import schedule_now, should_be_on
 from usb_storage import (
     get_free_mb,
     get_recording_dir_usb,
@@ -37,7 +37,30 @@ GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
-youtube_streamer = YouTubeStreamer(on_bytes_delta=lambda b, sid: bandwidth.record_delta(b, sid))
+def _on_yt_session_event(event_type: str, session_id: str, info: Dict[str, Any]) -> None:
+    """Persist YouTube session lifecycle events to SQLite. Wired into
+    YouTubeStreamer so every ffmpeg invocation -- whether ended cleanly by
+    schedule, killed by user, or crashed on its own -- leaves a row in
+    `yt_sessions` that the UI / /api/stream/sessions can read back."""
+    try:
+        if event_type == "start":
+            bandwidth.record_session_start(session_id, float(info.get("started_ts") or time.time()))
+        elif event_type == "end":
+            bandwidth.record_session_end(
+                session_id,
+                float(info.get("ended_ts") or time.time()),
+                info.get("exit_code"),
+                str(info.get("end_reason") or "ended"),
+                info.get("last_stderr"),
+            )
+    except Exception:
+        logger.exception("yt session event %s persist failed", event_type)
+
+
+youtube_streamer = YouTubeStreamer(
+    on_bytes_delta=lambda b, sid: bandwidth.record_delta(b, sid),
+    on_session_event=_on_yt_session_event,
+)
 recorder = Recorder()
 go2rtc_sup = Go2RtcSupervisor()
 
@@ -47,6 +70,15 @@ _recording_force = False
 _youtube_session_start = 0.0
 _recording_error: str | None = None
 _boot_applied = False
+
+# Scheduler timing. Tick is short so a crashed YouTube ffmpeg gets respawned
+# within ~SCHEDULER_TICK_SECS instead of the previous 5s gap (which YouTube
+# viewers saw as "stream offline"). STREAM_STALL_SECS is the time a running
+# ffmpeg process is allowed to push zero RTMP bytes before the supervisor
+# considers it wedged and force-restarts it. 30s is comfortably longer than
+# any real RTSP/RTMP handshake (<10s in practice on this Pi/Axis combo).
+SCHEDULER_TICK_SECS = 2.0
+STREAM_STALL_SECS = 30.0
 
 
 def _camera() -> AxisCamera:
@@ -113,9 +145,8 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.4"
+_EXTENSION_VERSION = "0.3.5"
 
-YOUTUBE_STALL_TIMEOUT_SEC = 30.0
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
 
@@ -144,11 +175,17 @@ def _scheduler_loop() -> None:
     while True:
         try:
             cfg = cfgmod.load()
-            import datetime as dt
 
-            now = dt.datetime.now()
+            now = schedule_now()
 
-            # YouTube desired
+            # YouTube desired. Within an active window we want continuous
+            # presence on YouTube Live, so the scheduler treats this as a
+            # supervisor: if ffmpeg has died we restart it, and if ffmpeg is
+            # alive but no bytes have flowed to RTMP for STREAM_STALL_SECS
+            # we kill it (logged as end_reason="stalled") so the next tick
+            # spawns a clean replacement. The `force` flag (set by the
+            # "Start now" button) keeps the supervisor active even outside a
+            # scheduled slot until the user clicks Stop.
             ys = cfg["youtube_schedule"]
             sched_yt = ys.get("enabled", False) and should_be_on(now, ys)
             with _state_lock:
@@ -167,15 +204,18 @@ def _scheduler_loop() -> None:
                     # its internal thread queues wedge after a transient
                     # RTMP/RTSP hiccup, leaving bytes flat-lined to YouTube
                     # and no further stderr. If no progress bytes have been
-                    # reported for YOUTUBE_STALL_TIMEOUT_SEC, kill and let
-                    # the next iteration restart it from scratch.
-                    idle = youtube_streamer.seconds_since_last_byte()
-                    if idle > YOUTUBE_STALL_TIMEOUT_SEC:
+                    # reported for STREAM_STALL_SECS, kill and let the next
+                    # iteration restart it from scratch -- recorded as
+                    # end_reason="stalled" in the broadcast history so the
+                    # UI distinguishes watchdog-forced restarts from clean
+                    # schedule/user stops.
+                    stalled = youtube_streamer.seconds_since_last_byte()
+                    if stalled > STREAM_STALL_SECS:
                         logger.warning(
-                            "YouTube ffmpeg stalled %.1fs without progress; restarting",
-                            idle,
+                            "YouTube stream stalled %.0fs without bytes; force-restart",
+                            stalled,
                         )
-                        youtube_streamer.stop()
+                        youtube_streamer.stop(reason="stalled")
             else:
                 if youtube_streamer.is_running():
                     youtube_streamer.stop()
@@ -210,7 +250,7 @@ def _scheduler_loop() -> None:
                     recorder.stop()
         except Exception as e:
             logger.exception("scheduler: %s", e)
-        time.sleep(5)
+        time.sleep(SCHEDULER_TICK_SECS)
 
 
 @app.route("/")
@@ -398,6 +438,28 @@ def stream_status():
     bw = bandwidth.status(cfg.get("bandwidth_overhead_pct", 3), cfg.get("monthly_quota_gb", 0))
     st.update({"bandwidth": bw, "session_bytes": sess, "force": yf})
     return jsonify(st)
+
+
+@app.route("/api/stream/sessions", methods=["GET"])
+def stream_sessions():
+    """Recent YouTube broadcast history. Defaults to the last 24h so the
+    streaming page can show today's sessions without paginating; pass
+    ?limit=N or ?since=<unix-ts> to override."""
+    try:
+        limit = int(request.args.get("limit", 50))
+    except (TypeError, ValueError):
+        limit = 50
+    since: float | None
+    raw_since = request.args.get("since")
+    if raw_since is None:
+        since = time.time() - 24 * 3600
+    else:
+        try:
+            since = float(raw_since)
+        except (TypeError, ValueError):
+            since = None
+    sessions = bandwidth.recent_sessions(limit=limit, since_ts=since)
+    return jsonify({"sessions": sessions, "since": since, "now": time.time()})
 
 
 @app.route("/api/bandwidth/status", methods=["GET"])

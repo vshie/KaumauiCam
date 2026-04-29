@@ -18,6 +18,52 @@ Repository variables (example names from workflow):
 
 On **push**, the workflow builds **linux/arm64** and **linux/arm/v7** and publishes the extension image.
 
+## Manual installation (BlueOS Extensions Manager)
+
+In **BlueOS → Extensions → Installed → +** (Create Extension), fill in:
+
+| Field | Value |
+|---|---|
+| Extension Identifier | `br.km` |
+| Extension Name | `Kaumaui Cam` |
+| Docker image | `vshie/blueos-kaumaui_cam` |
+| Docker tag | `main` |
+
+Paste the following into the **Permissions / Original Settings** JSON editor:
+
+```json
+{
+  "ExposedPorts": {
+    "6042/tcp": {},
+    "8555/tcp": {},
+    "8555/udp": {}
+  },
+  "HostConfig": {
+    "Binds": [
+      "/usr/blueos/extensions/kaumauicam:/app/data",
+      "/dev:/dev",
+      "/run/udev:/run/udev:ro"
+    ],
+    "NetworkMode": "host",
+    "Privileged": true,
+    "PortBindings": {
+      "6042/tcp": [{ "HostPort": "" }]
+    }
+  }
+}
+```
+
+What it grants:
+
+- **ExposedPorts** — `6042/tcp` (web UI / API), `8555/tcp` + `8555/udp` (go2rtc WebRTC/RTSP).
+- **Binds**
+  - `/usr/blueos/extensions/kaumauicam:/app/data` — persistent storage for SQLite, config, and the SD-fallback recordings folder.
+  - `/dev:/dev` — USB camera / removable storage device nodes.
+  - `/run/udev:/run/udev:ro` — hot-plug detection for USB drives.
+- **NetworkMode: host** — required for go2rtc / WebRTC and mDNS.
+- **Privileged: true** — required to mount external exFAT / NTFS USB drives from inside the container.
+- **PortBindings** — maps `6042/tcp` to a host port (BlueOS surfaces it in the Extensions UI).
+
 ## Local image / tar (manual install on Pi)
 
 From this directory:

@@ -94,6 +94,28 @@
               <p class="status-line">{{ bwText }}</p>
               <div class="bar"><div :style="{ width: bwBarPct + '%' }"></div></div>
               <p class="status-line">{{ ytStderr }}</p>
+              <h2 class="h2-spaced">Broadcast history <span class="badge badge-muted">last 24h</span></h2>
+              <p class="status-line hint" v-if="!streamSessions.length">No sessions in the last 24 hours.</p>
+              <div class="table-wrap" v-if="streamSessions.length">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Started (Pacific/Honolulu)</th>
+                      <th>Duration</th>
+                      <th>Bytes</th>
+                      <th>Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="s in streamSessions" :key="s.session_id" :class="sessionRowClass(s)">
+                      <td>{{ formatHonoluluTs(s.started_ts) }}</td>
+                      <td>{{ formatSessionDuration(s) }}</td>
+                      <td>{{ fmtBytes(s.bytes || 0) }}</td>
+                      <td :title="s.last_stderr || ''">{{ formatSessionOutcome(s) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
 
@@ -198,6 +220,9 @@
     <script type="text/x-template" id="km-sched-editor-template">
       <div class="schedule-block sched-editor">
         <h3>Weekly schedule (15-minute blocks)</h3>
+        <p class="status-line sched-time-line">
+          Current Pacific/Honolulu time: <strong>{{ honoluluNowText }}</strong>
+        </p>
         <p class="status-line">
           Paint the timeline when streaming or recording should run. The same pattern applies to each active weekday below.
         </p>
@@ -236,7 +261,7 @@
           <table>
             <thead>
               <tr>
-                <th>On (local time)</th>
+                <th>On (Pacific/Honolulu)</th>
               </tr>
             </thead>
             <tbody>
@@ -295,6 +320,7 @@
 
           var ALL_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
           var DAY_LABELS = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+          var SCHEDULE_TIMEZONE = "Pacific/Honolulu";
 
           function cloneSched(src) {
             src = src || {};
@@ -341,6 +367,25 @@
             });
           }
 
+          function formatHonoluluNow(ts) {
+            try {
+              return new Intl.DateTimeFormat(undefined, {
+                timeZone: SCHEDULE_TIMEZONE,
+                weekday: "short",
+                year: "numeric",
+                month: "short",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false,
+                timeZoneName: "short",
+              }).format(new Date(ts));
+            } catch (e) {
+              return new Date(ts).toLocaleString();
+            }
+          }
+
           var FIRST_IDX = 24; // 06:00
           var SLOT_COUNT = 48; // 12 hours * 4 slots
 
@@ -351,6 +396,8 @@
               return {
                 dragOn: false,
                 paintOn: true,
+                nowTick: Date.now(),
+                clockTimer: null,
                 ALL_DAYS: ALL_DAYS,
                 DAY_LABELS: DAY_LABELS,
               };
@@ -377,6 +424,9 @@
               },
               rangesToday: function () {
                 return mergedRanges(this.modelValue.slots || []);
+              },
+              honoluluNowText: function () {
+                return formatHonoluluNow(this.nowTick);
               },
             },
             methods: {
@@ -438,12 +488,16 @@
             },
             mounted: function () {
               var self = this;
+              this.clockTimer = setInterval(function () {
+                self.nowTick = Date.now();
+              }, 1000);
               this._mu = function () {
                 self.endDrag();
               };
               window.addEventListener("mouseup", this._mu);
             },
             beforeUnmount: function () {
+              if (this.clockTimer) clearInterval(this.clockTimer);
               window.removeEventListener("mouseup", this._mu);
             },
             template: "#km-sched-editor-template",
@@ -503,6 +557,7 @@
                 bwText: "—",
                 bwBarPct: 0,
                 ytStderr: "Idle.",
+                streamSessions: [],
                 recStatusLine: "—",
                 recFiles: [],
                 pc: null,
@@ -604,6 +659,43 @@
                     else self.ytStderr = ((s.stderr_tail || []).slice(-5).join(" | ") || "Idle.");
                   })
                   .catch(function () {});
+                this.api("GET", "/api/stream/sessions?limit=50")
+                  .then(function (r) {
+                    self.streamSessions = (r && r.sessions) || [];
+                  })
+                  .catch(function () {});
+              },
+              formatHonoluluTs: function (ts) {
+                if (!ts) return "—";
+                return formatHonoluluNow(ts * 1000);
+              },
+              formatSessionDuration: function (s) {
+                var t0 = s.started_ts || 0;
+                var t1 = s.ended_ts || (Date.now() / 1000);
+                var secs = Math.max(0, Math.round(t1 - t0));
+                if (secs < 60) return secs + "s";
+                var m = Math.floor(secs / 60);
+                var rem = secs % 60;
+                if (m < 60) return m + "m " + rem + "s";
+                var h = Math.floor(m / 60);
+                return h + "h " + (m % 60) + "m";
+              },
+              formatSessionOutcome: function (s) {
+                if (!s.ended_ts) return "Running";
+                var reason = s.end_reason || "ended";
+                if (reason === "stopped") return "Stopped (clean)";
+                if (reason === "stalled") return "Restarted (stalled)";
+                if (reason === "died") {
+                  var rc = (s.exit_code === null || s.exit_code === undefined) ? "?" : s.exit_code;
+                  return "Crashed (rc=" + rc + ")";
+                }
+                return reason;
+              },
+              sessionRowClass: function (s) {
+                if (!s.ended_ts) return "sess-running";
+                if (s.end_reason === "died") return "sess-died";
+                if (s.end_reason === "stalled") return "sess-stalled";
+                return "sess-stopped";
               },
               pollRec: function () {
                 var self = this;

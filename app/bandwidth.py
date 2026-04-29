@@ -1,4 +1,4 @@
-"""SQLite-backed YouTube upload bandwidth accounting."""
+"""SQLite-backed YouTube upload bandwidth accounting and session log."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 DB_PATH = os.environ.get("KAUMAUI_STATE_DB", "/app/data/state.db")
 _lock = threading.Lock()
@@ -44,6 +44,32 @@ def init_db() -> None:
                     PRIMARY KEY (y, m)
                 )
                 """
+            )
+            # Per-YouTube-session lifecycle log. We track every ffmpeg invocation
+            # so the UI can show the actual broadcast history (when a session
+            # started, how long it lasted, why it ended, how many bytes went
+            # out) instead of just per-tick byte deltas. `end_reason` is one of:
+            #   "stopped"  -- explicit stop() call (schedule end / user click)
+            #   "died"     -- ffmpeg exited on its own (network drop, RTSP
+            #                 hiccup, RTMP push refused). exit_code captures
+            #                 ffmpeg's return code; last_stderr captures the
+            #                 final ~5 lines of ffmpeg stderr for diagnosis.
+            #   NULL       -- session is still running.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS yt_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    started_ts REAL NOT NULL,
+                    ended_ts REAL,
+                    bytes INTEGER NOT NULL DEFAULT 0,
+                    exit_code INTEGER,
+                    end_reason TEXT,
+                    last_stderr TEXT
+                )
+                """
+            )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS yt_sessions_started_idx ON yt_sessions(started_ts DESC)"
             )
             c.commit()
         finally:
@@ -121,6 +147,79 @@ def status(overhead_pct: float = 0.0, quota_gb: float = 0.0) -> Dict[str, Any]:
         "remaining_bytes": remaining,
         "overhead_pct": overhead_pct,
     }
+
+
+def record_session_start(session_id: str, started_ts: float) -> None:
+    """Open a new yt_sessions row when ffmpeg is launched. INSERT OR REPLACE
+    so a re-used session_id (shouldn't happen with uuid4 prefixes, but cheap
+    insurance) cleanly resets the row instead of failing with PRIMARY KEY
+    conflict mid-stream."""
+    if not session_id:
+        return
+    with _lock:
+        c = _conn()
+        try:
+            c.execute(
+                "INSERT OR REPLACE INTO yt_sessions (session_id, started_ts, bytes) VALUES (?, ?, 0)",
+                (session_id, started_ts),
+            )
+            c.commit()
+        finally:
+            c.close()
+
+
+def record_session_end(
+    session_id: str,
+    ended_ts: float,
+    exit_code: Optional[int],
+    end_reason: str,
+    last_stderr: Optional[str],
+) -> None:
+    """Close out a yt_sessions row. We re-aggregate the session's byte total
+    from the per-tick `bandwidth` rows here rather than tracking a running
+    counter on the row, so the final number always matches the bandwidth
+    accounting (which is the source of truth for quota math)."""
+    if not session_id:
+        return
+    with _lock:
+        c = _conn()
+        try:
+            r = c.execute(
+                "SELECT COALESCE(SUM(bytes), 0) FROM bandwidth WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            total_bytes = int(r[0]) if r else 0
+            c.execute(
+                "UPDATE yt_sessions SET ended_ts = ?, bytes = ?, exit_code = ?, end_reason = ?, last_stderr = ? WHERE session_id = ?",
+                (ended_ts, total_bytes, exit_code, end_reason, last_stderr, session_id),
+            )
+            c.commit()
+        finally:
+            c.close()
+
+
+def recent_sessions(limit: int = 50, since_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Return the most recent YouTube sessions, newest first. Used by the
+    /api/stream/sessions endpoint and the UI's broadcast history table.
+    `since_ts` filters to sessions started at or after that Unix timestamp."""
+    limit = max(1, min(int(limit), 500))
+    c = _conn()
+    try:
+        if since_ts is not None:
+            rows = c.execute(
+                "SELECT session_id, started_ts, ended_ts, bytes, exit_code, end_reason, last_stderr "
+                "FROM yt_sessions WHERE started_ts >= ? ORDER BY started_ts DESC LIMIT ?",
+                (float(since_ts), limit),
+            ).fetchall()
+        else:
+            rows = c.execute(
+                "SELECT session_id, started_ts, ended_ts, bytes, exit_code, end_reason, last_stderr "
+                "FROM yt_sessions ORDER BY started_ts DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
 
 
 def session_sum_since(session_start: float, session_id: Optional[str] = None) -> int:

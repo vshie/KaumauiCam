@@ -507,6 +507,20 @@ button.link-del:hover {
   font-weight: 600;
 }
 
+.sched-time-line {
+  color: #c7f9ef;
+}
+
+.sched-time-line strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+tr.sess-running td { color: #66e0c2; }
+tr.sess-died td { color: #f38ba8; }
+tr.sess-stalled td { color: #fab387; }
+tr.sess-stopped td { color: var(--muted); }
+
 .sched-check-label {
   display: flex;
   align-items: center;
