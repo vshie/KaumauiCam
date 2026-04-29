@@ -1,15 +1,22 @@
-"""RTSP -> 5-minute MP4 chunks via GStreamer.
+"""RTSP -> 5-minute MP4 chunks via ffmpeg.
 
-ffmpeg's RTSP demuxer drops PTS on this Axis HEVC stream, so stream-copy via
-ffmpeg produces 0-byte / 44-byte MP4s. GStreamer's rtph265depay recovers
-timestamps correctly, so we use it instead.
+We use the same RTSP-input recipe the YouTube streamer uses, because it's been
+proven to work against this Axis HEVC source:
 
-Rather than splitmuxsink (which buffers a long time before producing its first
-playable file), we rotate the pipeline ourselves: every SEGMENT_SECONDS a
-supervisor thread sends SIGINT to the running gst-launch so it EOS-finalizes
-the current mp4 cleanly, then spawns a fresh pipeline for the next chunk.
-Each file therefore has an accurate start-time in its filename and is fully
-playable on its own.
+    -fflags +genpts+igndts -use_wallclock_as_timestamps 1 -rtsp_transport tcp
+
+The Axis stream's RTP timestamps are unreliable (the encoder's "Average bitrate"
+mode emits ticks at the configured 30fps clock even when the profile is set to
+15fps, so a 5-minute capture would otherwise carry ~10 minutes of PTS span and
+play back at half-speed). Forcing wall-clock timestamps on input regenerates
+clean, monotonic PTS that match real time, so each segment's reported duration
+matches its wall-clock duration.
+
+We rotate segments ourselves rather than using ffmpeg's `-f segment`: every
+SEGMENT_SECONDS a supervisor thread sends SIGINT to the running ffmpeg so it
+finalizes the current mp4 (writing a moov index for VLC) before spawning a
+fresh pipeline for the next chunk. Each file therefore has an accurate
+start-time in its filename and is fully indexed/seekable on its own.
 """
 
 from __future__ import annotations
@@ -27,10 +34,10 @@ logger = logging.getLogger(__name__)
 
 SEGMENT_SECONDS = 300
 
-# Discard segment files that contain less than this many bytes when gst-launch
+# Discard segment files that contain less than this many bytes when ffmpeg
 # exits. A clean 5-min H.265 1080p15 segment is hundreds of KB at minimum, so
-# anything below this threshold is just an empty mp4 created by `filesink`
-# before RTSP/encoder negotiation succeeded.
+# anything below this threshold is just an empty mp4 stub created before
+# RTSP/encoder negotiation succeeded.
 MIN_SEGMENT_BYTES = 100 * 1024
 
 
@@ -68,54 +75,42 @@ class Recorder:
             }
 
     def _build_cmd(self, out_path: str) -> List[str]:
-        # Queue settings are deliberately tuned for *recording* fidelity, not
-        # live-display robustness:
-        #   - leaky=no: under USB write stalls / mp4mux flush hiccups, apply
-        #     backpressure all the way back to rtspsrc instead of silently
-        #     dropping the newest frames. We'd rather see an explicit error
-        #     than quietly produce a sparser MP4 that's missing training
-        #     data. (The previous default of leaky=downstream + silent=true
-        #     would absorb up to 30s of stalls as invisible frame loss.)
-        #   - max-size-time=2s: enough to absorb normal write jitter; small
-        #     enough that real stalls surface fast.
-        #   - silent=false: queue overrun/underrun events are logged so the
-        #     status endpoint's stderr_tail captures them.
+        # Stream-copy the RTSP H.265 video to a self-contained MP4. Key flags:
+        #   -fflags +genpts+igndts: regenerate PTS, ignore the input's DTS.
+        #   -use_wallclock_as_timestamps 1: stamp incoming packets with the
+        #     local wall-clock; this is what makes a 5-minute capture produce
+        #     a 5-minute file regardless of what the camera's RTP clock claims.
+        #     The Axis encoder's "Average bitrate" mode otherwise emits ticks
+        #     at the configured 30fps clock even when the profile is set to
+        #     15fps, so a 5-min capture would carry ~10 minutes of PTS span
+        #     and play back at half-speed.
+        #   -rtsp_transport tcp: avoid UDP packet loss; matches Axis defaults.
+        #   -an: drop any audio track the camera might enable -- we only want
+        #     the H.265 video for training/review data.
+        #   -movflags +faststart: shuffle the moov atom to the front on EOS
+        #     so VLC sees the index immediately and seeking works without
+        #     reading the tail of the file first.
         return [
-            "gst-launch-1.0",
-            "-e",
-            "rtspsrc",
-            f"location={self._rtsp_url}",
-            "protocols=tcp",
-            "latency=5000",
-            "retry=5",
-            "timeout=5000000",
-            "!",
-            "rtph265depay",
-            "!",
-            "h265parse",
-            "config-interval=-1",
-            "!",
-            "queue",
-            "max-size-time=2000000000",
-            "max-size-bytes=0",
-            "max-size-buffers=0",
-            "leaky=no",
-            "silent=false",
-            "!",
-            "mp4mux",
-            "fragment-duration=5000",
-            "streamable=true",
-            "!",
-            "filesink",
-            f"location={out_path}",
-            "sync=false",
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "warning",
+            "-fflags", "+genpts+igndts",
+            "-use_wallclock_as_timestamps", "1",
+            "-rtsp_transport", "tcp",
+            "-i", self._rtsp_url or "",
+            "-map", "0:v:0",
+            "-an",
+            "-c:v", "copy",
+            "-movflags", "+faststart",
+            "-y",
+            out_path,
         ]
 
     def _run_one_segment(self) -> bool:
-        """Run gst-launch for up to SEGMENT_SECONDS, then EOS-finalize the mp4.
+        """Run ffmpeg for up to SEGMENT_SECONDS, then EOS-finalize the mp4.
 
         Returns True if a usable (>= MIN_SEGMENT_BYTES) segment was produced.
-        Returns False if gst-launch died before producing meaningful output --
+        Returns False if ffmpeg died before producing meaningful output --
         in that case the empty/stub mp4 file is deleted before returning so
         the recordings directory doesn't fill up with debris during a camera
         outage. The supervisor uses this signal to apply exponential backoff.
@@ -163,22 +158,23 @@ class Recorder:
         while not self._stop.is_set() and time.time() < deadline:
             if proc.poll() is not None:
                 logger.warning(
-                    "gst-launch exited early rc=%s file=%s", proc.returncode, out
+                    "ffmpeg exited early rc=%s file=%s", proc.returncode, out
                 )
                 break
             time.sleep(1.0)
 
-        # Ask gst-launch to EOS + finalize the mp4. With `-e` SIGINT triggers
-        # a clean shutdown that writes moov before exiting.
+        # Ask ffmpeg to flush the trailer (moov atom) and exit. SIGINT prompts
+        # ffmpeg to finish writing the current MP4 cleanly so the file is
+        # fully indexed and seekable in VLC.
         if proc.poll() is None:
             try:
                 proc.send_signal(signal.SIGINT)
             except Exception as e:
-                logger.warning("SIGINT to gst-launch failed: %s", e)
+                logger.warning("SIGINT to ffmpeg failed: %s", e)
             try:
-                proc.wait(timeout=10)
+                proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                logger.warning("gst-launch did not finalize in 10s; terminating")
+                logger.warning("ffmpeg did not finalize in 15s; terminating")
                 try:
                     proc.terminate()
                     proc.wait(timeout=5)
@@ -223,7 +219,7 @@ class Recorder:
             if ok:
                 backoff = 1.0
                 continue
-            # gst-launch died before producing a usable segment -- usually
+            # ffmpeg died before producing a usable segment -- usually
             # the camera is unreachable or RTSP is rejecting the profile.
             # Back off so we don't burn through filenames and CPU spinning
             # up empty pipelines once per second.

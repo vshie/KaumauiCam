@@ -124,13 +124,13 @@ class AxisCamera:
         return m.group(1)
 
     def ensure_defaultfishpond_profile(self) -> None:
-        """Set DefaultFishPond (S0) to H.265 1080p @ 15 fps if S0 name matches."""
+        """Set DefaultFishPond (S0) to motion-friendly H.265 1080p30 if S0 name matches."""
         params = self.param_list("StreamProfile")
         name0 = params.get("root.StreamProfile.S0.Name", "")
         if name0 == "DefaultFishPond":
             self.param_update(
                 {
-                    "root.StreamProfile.S0.Parameters": "videocodec=h265&resolution=1920x1080&fps=15&videobitratemode=vbr&videozprofile=storage",
+                    "root.StreamProfile.S0.Parameters": "videocodec=h265&resolution=1920x1080&fps=30&videobitratemode=mbr&videomaxbitrate=4500&videokeyframeinterval=60&videocompression=20",
                 }
             )
             logger.info("Updated DefaultFishPond profile parameters")
