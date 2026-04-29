@@ -547,6 +547,35 @@ def rec_delete():
     return jsonify({"error": "not found"}), 404
 
 
+@app.route("/api/recordings/delete-all", methods=["POST"])
+def rec_delete_all():
+    cfg = cfgmod.load()
+    try:
+        dest, _ = _recording_dir(cfg)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    if not os.path.isdir(dest):
+        return jsonify({"ok": True, "deleted": 0, "errors": []})
+    # Skip the segment currently being written so we don't fight gstreamer.
+    current = recorder.status().get("current_file") or ""
+    current_name = os.path.basename(current) if current else ""
+    deleted = 0
+    errors: list[str] = []
+    for n in os.listdir(dest):
+        if not n.endswith((".ts", ".mp4")):
+            continue
+        if current_name and n == current_name:
+            continue
+        p = os.path.join(dest, n)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+                deleted += 1
+        except OSError as e:
+            errors.append(f"{n}: {e}")
+    return jsonify({"ok": True, "deleted": deleted, "errors": errors})
+
+
 @app.route("/api/recordings/download/<name>")
 def rec_download(name: str):
     if "/" in name or ".." in name:

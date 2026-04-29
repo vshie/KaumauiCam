@@ -117,6 +117,14 @@
               <p class="status-line">{{ recStatusLine }}</p>
               <h2 class="h2-spaced">Files</h2>
               <p class="status-line hint">Recordings are saved as 5-minute MP4 segments while the session is active.</p>
+              <div class="row">
+                <button
+                  type="button"
+                  class="btn btn-danger"
+                  :disabled="!recFiles.length"
+                  @click="deleteAllRec"
+                >Delete all recordings</button>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead>
@@ -746,6 +754,37 @@
                 if (!confirm("Delete " + name + "?")) return;
                 this.api("POST", "/api/recordings/delete", { name: name }).then(function () {
                   self.pollRec();
+                });
+              },
+              deleteAllRec: function () {
+                var self = this;
+                var n = (this.recFiles || []).length;
+                if (!n) return;
+                var msg =
+                  "Delete ALL " +
+                  n +
+                  " recording" +
+                  (n === 1 ? "" : "s") +
+                  "? This cannot be undone." +
+                  "\n\n(The currently recording segment, if any, is kept.)";
+                if (!confirm(msg)) return;
+                var typed = prompt('Type "DELETE" to confirm clearing all recordings.');
+                if (typed !== "DELETE") {
+                  alert("Cancelled — nothing was deleted.");
+                  return;
+                }
+                this.api("POST", "/api/recordings/delete-all", {}).then(function (res) {
+                  self.pollRec();
+                  if (res && res.errors && res.errors.length) {
+                    alert(
+                      "Deleted " +
+                        (res.deleted || 0) +
+                        " file(s); " +
+                        res.errors.length +
+                        " error(s):\n" +
+                        res.errors.join("\n"),
+                    );
+                  }
                 });
               },
               saveSettings: function () {
