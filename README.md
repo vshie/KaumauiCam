@@ -54,10 +54,11 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 1. Create stream profile **`livepreview`**: 720p H.264 (or use **Create livepreview profile** in the UI / `POST /api/camera/ensure-livepreview`).
 2. **DefaultFishPond** is set to H.265 1920×1080 @ 15 fps on boot / via **Apply DefaultFishpond** in Settings.
+3. **`youtubelive`** is auto-provisioned on boot (or via **Apply youtubelive** in Settings / `POST /api/camera/ensure-youtubelive`): H.264 1920×1080 @ 30 fps, MBR cap 4500 kbps, 2 s GOP, compression=20. This is what the YouTube path streams. On older Axis firmwares the StreamProfile slot groups aren't pre-allocated, so the extension uses VAPIX `action=add` then `action=update` to populate the slot.
 
 ### YouTube
 
-- Ingest uses **default** RTSP (no `streamprofile`) — **H.264** passthrough, **video-only** (no audio track is sent to YouTube; the channel is silent by design). The only ffmpeg input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; everything else is a true stream-copy so the Pi never re-encodes 1080p.
+- Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps) — **H.264 passthrough, video-only** (no audio track is sent to YouTube; the channel is silent by design). The only ffmpeg input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; everything else is a true stream-copy so the Pi never re-encodes 1080p.
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
 
 ### Recordings
@@ -103,6 +104,7 @@ git push -u origin main
 | GET | `/api/storage` | USB mount + SD free GB |
 | POST | `/api/camera/ensure-livepreview` | Create profile on camera |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
+| POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |
 | * | `/go2rtc/<path>` | Reverse proxy to go2rtc (WebRTC signaling) |
 
 ## License

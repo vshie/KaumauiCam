@@ -81,7 +81,7 @@
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Uses camera default H.264 RTSP (not FishPond), stream-copied to YouTube — video-only, no re-encoding on the Pi.</p>
+              <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube — video-only, no re-encoding on the Pi.</p>
               <label>Stream key (paste from YouTube Studio → Stream)</label>
               <textarea v-model="ytKey" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
               <schedule-editor v-model="draftYt" />
@@ -168,6 +168,7 @@
                 <button type="button" class="btn" @click="saveSettings">Save settings</button>
                 <button type="button" class="btn btn-secondary" @click="resetBw">Reset month bandwidth counter</button>
                 <button type="button" class="btn btn-secondary" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
+                <button type="button" class="btn btn-secondary" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
               </div>
               <p class="status-line">Month counter resets automatically at local midnight on the 1st (by calendar month sum).</p>
             </div>
@@ -770,6 +771,11 @@
               applyFishpond: function () {
                 this.api("POST", "/api/camera/ensure-fishpond", {}).then(function () {
                   alert("Applied DefaultFishPond profile parameters on camera.");
+                });
+              },
+              applyYoutubelive: function () {
+                this.api("POST", "/api/camera/ensure-youtubelive", {}).then(function (r) {
+                  alert((r && r.message) || "Provisioned youtubelive profile on camera.");
                 });
               },
             },

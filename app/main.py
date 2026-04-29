@@ -100,6 +100,12 @@ def _apply_boot() -> None:
         logger.warning("boot fishpond profile: %s", e)
     try:
         cam = _camera()
+        ok, msg = cam.ensure_youtubelive_profile()
+        logger.info("boot youtubelive profile: %s (%s)", msg, ok)
+    except Exception as e:
+        logger.warning("boot youtubelive profile: %s", e)
+    try:
+        cam = _camera()
         rtsp = cam.rtsp_url("livepreview")
         render_config(rtsp)
         go2rtc_sup.start()
@@ -107,7 +113,8 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.2.0"
+_EXTENSION_VERSION = "0.3.0"
+YOUTUBE_STREAM_PROFILE = "youtubelive"
 
 
 def _parse_listen_port() -> int:
@@ -149,7 +156,7 @@ def _scheduler_loop() -> None:
             if want_yt and key:
                 if not youtube_streamer.is_running():
                     cam = _camera()
-                    rtsp = cam.rtsp_url(None)
+                    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
                     if youtube_streamer.start(rtsp, key):
                         with _state_lock:
                             _youtube_session_start = time.time()
@@ -341,7 +348,11 @@ def stream_start():
     with _state_lock:
         _youtube_force = True
     cam = _camera()
-    rtsp = cam.rtsp_url(None)
+    try:
+        cam.ensure_youtubelive_profile()
+    except Exception as e:
+        logger.warning("ensure youtubelive on stream/start: %s", e)
+    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
     if youtube_streamer.start(rtsp, key):
         with _state_lock:
             _youtube_session_start = time.time()
@@ -409,6 +420,15 @@ def ensure_fishpond():
     try:
         _camera().ensure_defaultfishpond_profile()
         return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/camera/ensure-youtubelive", methods=["POST"])
+def ensure_youtubelive():
+    try:
+        ok, msg = _camera().ensure_youtubelive_profile()
+        return jsonify({"ok": ok, "message": msg})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

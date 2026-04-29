@@ -98,6 +98,31 @@ class AxisCamera:
         r = self._get("/axis-cgi/param.cgi", params=params)
         r.raise_for_status()
 
+    def stream_profile_add(self) -> Optional[str]:
+        """
+        Create a new (empty) StreamProfile slot via VAPIX `action=add`.
+        Returns the slot id (e.g. 'S2') on success, else None.
+
+        Older Axis firmwares don't pre-allocate StreamProfile.S0..S25 — the
+        slot groups only exist after an explicit `add` call. The response
+        body looks like 'S2 OK' (or contains '# Error: ...' on failure).
+        """
+        r = self._post(
+            "/axis-cgi/param.cgi",
+            data={
+                "action": "add",
+                "template": "streamprofile",
+                "group": "StreamProfile",
+            },
+        )
+        r.raise_for_status()
+        body = r.text or ""
+        m = re.search(r"\b(S\d+)\s+OK\b", body)
+        if not m:
+            logger.warning("StreamProfile add unexpected response: %r", body)
+            return None
+        return m.group(1)
+
     def ensure_defaultfishpond_profile(self) -> None:
         """Set DefaultFishPond (S0) to H.265 1080p @ 15 fps if S0 name matches."""
         params = self.param_list("StreamProfile")
@@ -120,29 +145,85 @@ class AxisCamera:
         return None
 
     def next_free_stream_profile_slot(self) -> Optional[str]:
+        """
+        Return a slot key prefix for an existing-but-unused profile entry.
+        A slot is considered free if its Name is blank OR if Name is the
+        Axis-generated placeholder (e.g. 'profile3') AND Parameters is empty
+        — both are easy targets to overwrite without trampling user data.
+        """
         params = self.param_list("StreamProfile")
         for i in range(26):
             sid = f"S{i}"
-            n = params.get(f"root.StreamProfile.{sid}.Name", "")
-            if not n.strip():
+            name = params.get(f"root.StreamProfile.{sid}.Name", "").strip()
+            prm = params.get(f"root.StreamProfile.{sid}.Parameters", "").strip()
+            if not name:
+                return f"root.StreamProfile.{sid}"
+            if re.fullmatch(r"profile\d+", name) and not prm:
                 return f"root.StreamProfile.{sid}"
         return None
 
-    def ensure_livepreview_profile(self) -> Tuple[bool, str]:
+    def _ensure_stream_profile(
+        self, name: str, description: str, parameters: str
+    ) -> Tuple[bool, str]:
         """
-        Ensure stream profile 'livepreview' exists (720p H.264).
-        Returns (ok, message).
+        Generic ensure: if a profile named `name` exists, make sure its
+        Parameters match `parameters` (and re-apply if not). Otherwise
+        allocate a slot — preferring an empty/placeholder slot, falling
+        back to VAPIX `action=add` for firmwares that don't pre-allocate
+        StreamProfile.Sx groups — and write Name/Description/Parameters.
         """
-        if self.find_stream_profile_slot("livepreview"):
-            return True, "livepreview profile already present"
+        existing = self.find_stream_profile_slot(name)
+        if existing:
+            current = self.param_list(existing.split("root.")[-1])
+            cur_params = current.get(f"{existing}.Parameters", "")
+            if cur_params == parameters:
+                return True, f"{name} profile already present on {existing}"
+            self.param_update({f"{existing}.Parameters": parameters})
+            return True, f"Refreshed {name} parameters on {existing}"
+
         slot = self.next_free_stream_profile_slot()
         if not slot:
-            return False, "No free StreamProfile slot"
+            new_sid = self.stream_profile_add()
+            if not new_sid:
+                return False, "Camera refused to allocate a StreamProfile slot"
+            slot = f"root.StreamProfile.{new_sid}"
+
         self.param_update(
             {
-                f"{slot}.Name": "livepreview",
-                f"{slot}.Description": "Kaumaui Cam live WebRTC preview",
-                f"{slot}.Parameters": "videocodec=h264&resolution=1280x720&fps=25&videobitratemode=vbr&videokeyframeinterval=50",
+                f"{slot}.Name": name,
+                f"{slot}.Description": description,
+                f"{slot}.Parameters": parameters,
             }
         )
-        return True, f"Created livepreview on {slot}"
+        return True, f"Created {name} on {slot}"
+
+    def ensure_livepreview_profile(self) -> Tuple[bool, str]:
+        """Ensure stream profile 'livepreview' exists (720p H.264)."""
+        return self._ensure_stream_profile(
+            name="livepreview",
+            description="Kaumaui Cam live WebRTC preview",
+            parameters="videocodec=h264&resolution=1280x720&fps=25&videobitratemode=vbr&videokeyframeinterval=50",
+        )
+
+    def ensure_youtubelive_profile(self) -> Tuple[bool, str]:
+        """
+        Ensure stream profile 'youtubelive' exists.
+
+        Targets a YouTube-friendly H.264 1080p30 stream with a 4500 Kbps
+        max-bitrate cap (well under the boat's 8 Mbps Starlink uplink) and
+        a 2-second keyframe interval (60 frames at 30 fps), which is what
+        YouTube Live recommends for low-latency ingest.
+        """
+        return self._ensure_stream_profile(
+            name="youtubelive",
+            description="Kaumaui Cam YouTube live H.264 1080p30 4.5 Mbps",
+            parameters=(
+                "videocodec=h264"
+                "&resolution=1920x1080"
+                "&fps=30"
+                "&videobitratemode=mbr"
+                "&videomaxbitrate=4500"
+                "&videokeyframeinterval=60"
+                "&videocompression=20"
+            ),
+        )
