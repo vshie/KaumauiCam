@@ -113,7 +113,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.3"
+_EXTENSION_VERSION = "0.3.4"
 
 YOUTUBE_STALL_TIMEOUT_SEC = 30.0
 YOUTUBE_STREAM_PROFILE = "youtubelive"
@@ -533,15 +533,28 @@ def rec_list():
         dest, _ = _recording_dir(cfg)
     except Exception:
         dest = os.path.join("/app/data", "recordings")
+    # Hide stub files left behind when gst-launch couldn't reach the camera.
+    # The recorder is supposed to delete these itself, but a defensive
+    # threshold here keeps the UI clean if any slip through (e.g. user
+    # killed the container mid-segment, leaving a zero-byte file).
+    # The currently-recording segment is exempt -- it's still being written
+    # and may legitimately be tiny in its first second or two.
+    min_bytes = 100 * 1024
+    current = recorder.status().get("current_file") or ""
+    current_name = os.path.basename(current) if current else ""
     items = []
     if os.path.isdir(dest):
         for n in sorted(os.listdir(dest), reverse=True):
-            if n.endswith((".ts", ".mp4")):
-                p = os.path.join(dest, n)
-                try:
-                    items.append({"name": n, "size": os.path.getsize(p), "mtime": os.path.getmtime(p)})
-                except OSError:
-                    pass
+            if not n.endswith((".ts", ".mp4")):
+                continue
+            p = os.path.join(dest, n)
+            try:
+                sz = os.path.getsize(p)
+                if sz < min_bytes and n != current_name:
+                    continue
+                items.append({"name": n, "size": sz, "mtime": os.path.getmtime(p)})
+            except OSError:
+                pass
     return jsonify({"files": items, "dir": dest})
 
 
@@ -561,6 +574,40 @@ def rec_delete():
         os.remove(path)
         return jsonify({"ok": True})
     return jsonify({"error": "not found"}), 404
+
+
+@app.route("/api/recordings/cleanup-empty", methods=["POST"])
+def rec_cleanup_empty():
+    """Delete all stub mp4/ts files smaller than 100 KB. These accumulate
+    when the camera RTSP is rejecting the configured profile (each retry
+    creates a fresh empty file via gst's filesink before the negotiation
+    fails). Safe to call any time; the currently-recording segment is
+    skipped by name."""
+    min_bytes = 100 * 1024
+    cfg = cfgmod.load()
+    try:
+        dest, _ = _recording_dir(cfg)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    if not os.path.isdir(dest):
+        return jsonify({"ok": True, "deleted": 0})
+    current = recorder.status().get("current_file") or ""
+    current_name = os.path.basename(current) if current else ""
+    deleted = 0
+    errors: list[str] = []
+    for n in os.listdir(dest):
+        if not n.endswith((".ts", ".mp4")):
+            continue
+        if current_name and n == current_name:
+            continue
+        p = os.path.join(dest, n)
+        try:
+            if os.path.getsize(p) < min_bytes:
+                os.remove(p)
+                deleted += 1
+        except OSError as e:
+            errors.append(f"{n}: {e}")
+    return jsonify({"ok": True, "deleted": deleted, "errors": errors})
 
 
 @app.route("/api/recordings/delete-all", methods=["POST"])

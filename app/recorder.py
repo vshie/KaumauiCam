@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 SEGMENT_SECONDS = 300
 
+# Discard segment files that contain less than this many bytes when gst-launch
+# exits. A clean 5-min H.265 1080p15 segment is hundreds of KB at minimum, so
+# anything below this threshold is just an empty mp4 created by `filesink`
+# before RTSP/encoder negotiation succeeded.
+MIN_SEGMENT_BYTES = 100 * 1024
+
 
 class Recorder:
     def __init__(self, on_event: Optional[Callable[[str, str], None]] = None):
@@ -105,7 +111,15 @@ class Recorder:
             "sync=false",
         ]
 
-    def _run_one_segment(self) -> None:
+    def _run_one_segment(self) -> bool:
+        """Run gst-launch for up to SEGMENT_SECONDS, then EOS-finalize the mp4.
+
+        Returns True if a usable (>= MIN_SEGMENT_BYTES) segment was produced.
+        Returns False if gst-launch died before producing meaningful output --
+        in that case the empty/stub mp4 file is deleted before returning so
+        the recordings directory doesn't fill up with debris during a camera
+        outage. The supervisor uses this signal to apply exponential backoff.
+        """
         assert self._dest_dir and self._rtsp_url
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         out = os.path.join(self._dest_dir, f"kaumaui-{ts}.mp4")
@@ -175,20 +189,46 @@ class Recorder:
                         pass
 
         err_th.join(timeout=2)
+
+        # If the segment is too small to be usable (RTSP failed before any
+        # real video reached mp4mux), delete the stub file so it doesn't
+        # show up in the recordings list and signal failure to the supervisor.
+        try:
+            sz = os.path.getsize(out)
+        except OSError:
+            sz = 0
+        if sz < MIN_SEGMENT_BYTES:
+            logger.warning(
+                "Discarding short segment %s (%d bytes < %d threshold)",
+                out, sz, MIN_SEGMENT_BYTES,
+            )
+            try:
+                os.remove(out)
+            except OSError as e:
+                logger.warning("failed to remove short segment %s: %s", out, e)
+            return False
+
         if self._on_event:
             self._on_event("segment_complete", out)
+        return True
 
     def _supervise(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
             try:
-                self._run_one_segment()
-                backoff = 1.0
+                ok = self._run_one_segment()
             except Exception as e:
                 logger.exception("recorder segment: %s", e)
-                # Back off on repeated failures so we don't spin.
-                self._stop.wait(timeout=backoff)
-                backoff = min(backoff * 2, 30.0)
+                ok = False
+            if ok:
+                backoff = 1.0
+                continue
+            # gst-launch died before producing a usable segment -- usually
+            # the camera is unreachable or RTSP is rejecting the profile.
+            # Back off so we don't burn through filenames and CPU spinning
+            # up empty pipelines once per second.
+            self._stop.wait(timeout=backoff)
+            backoff = min(backoff * 2, 30.0)
         with self._lock:
             self._proc = None
             self._current_file = None
