@@ -8,6 +8,13 @@ from typing import Dict, List, Set, Tuple
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _ALL_DAYS_LIST = list(_WEEKDAYS)
 _LEGACY_KEYS = frozenset({"window_start", "window_stop", "interval_min", "duration_min"})
+SCHEDULE_TIMEZONE_LABEL = "Pacific/Honolulu"
+SCHEDULE_TIMEZONE = dt.timezone(dt.timedelta(hours=-10), SCHEDULE_TIMEZONE_LABEL)
+
+
+def schedule_now() -> dt.datetime:
+    """Return the current schedule clock time in Pacific/Honolulu."""
+    return dt.datetime.now(SCHEDULE_TIMEZONE)
 
 
 def _parse_hhmm(s: str) -> Tuple[int, int]:
