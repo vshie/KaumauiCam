@@ -519,6 +519,7 @@ button.link-del:hover {
 tr.sess-running td { color: #66e0c2; }
 tr.sess-died td { color: #f38ba8; }
 tr.sess-stalled td { color: #fab387; }
+tr.sess-network td { color: #f9e2af; }
 tr.sess-stopped td { color: var(--muted); }
 
 .sched-check-label {

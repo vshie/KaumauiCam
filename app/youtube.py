@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -13,9 +14,77 @@ from typing import Callable, List, Optional
 logger = logging.getLogger(__name__)
 
 RTMP_BASE = "rtmp://a.rtmp.youtube.com/live2"
+RTMP_HOST = "a.rtmp.youtube.com"
+
+# Resilience tuning. The boat is on Starlink, which goes through brief
+# (1–30s) blips when the satellite hands off, the dish reorients, or
+# upstream DNS hiccups. ffmpeg itself doesn't reconnect RTMP outputs,
+# so we rely on the scheduler to respawn — but if we respawn every
+# scheduler tick (2s) during a 30s DNS outage we generate 15 noise
+# entries in the broadcast history, hammer YouTube's ingest servers,
+# and starve actual recovery attempts. The values below trade off
+# fast recovery on healthy networks vs. quiet behavior during
+# extended outages.
+HEALTHY_DURATION_SEC = 30.0  # session that ran this long resets failure counter
+HEALTHY_BYTES = 1 * 1024 * 1024  # ...and pushed at least this many bytes
+BACKOFF_MIN_SEC = 2.0
+BACKOFF_MAX_SEC = 30.0
+DNS_CHECK_TIMEOUT_SEC = 3.0
 
 
 SessionEventCb = Callable[[str, str, dict], None]
+
+
+def _classify_end(last_stderr: Optional[str]) -> str:
+    """Bucket ffmpeg-death stderr into a coarse end_reason for the
+    broadcast history UI. Recognised buckets:
+      - "dns": Starlink/DNS hiccup, hostname resolution failed
+      - "rtmp_broken_pipe": YouTube closed the RTMP socket on us
+      - "network": socket-level failure to reach YouTube
+      - "rtsp_error": camera RTSP returned an error code
+    Unrecognised stderr falls back to "died".
+    """
+    if not last_stderr:
+        return "died"
+    s = last_stderr.lower()
+    if (
+        "failed to resolve hostname" in s
+        or "temporary failure in name resolution" in s
+        or "name or service not known" in s
+    ):
+        return "dns"
+    if "broken pipe" in s:
+        return "rtmp_broken_pipe"
+    if (
+        "connection refused" in s
+        or "connection reset" in s
+        or "network is unreachable" in s
+        or "no route to host" in s
+    ):
+        return "network"
+    if "server returned 4" in s or "server returned 5" in s:
+        return "rtsp_error"
+    return "died"
+
+
+def _dns_ok(host: str = RTMP_HOST, timeout: float = DNS_CHECK_TIMEOUT_SEC) -> bool:
+    """Best-effort DNS pre-flight. Runs gethostbyname in a worker
+    thread with a hard timeout because Starlink DNS occasionally hangs
+    for 30+ seconds during satellite handoff and we don't want the
+    scheduler thread to block on resolver retries."""
+    result: List[Optional[bool]] = [None]
+
+    def _resolve() -> None:
+        try:
+            socket.gethostbyname(host)
+            result[0] = True
+        except Exception:
+            result[0] = False
+
+    t = threading.Thread(target=_resolve, daemon=True, name="yt-dns-probe")
+    t.start()
+    t.join(timeout)
+    return result[0] is True
 
 
 class YouTubeStreamer:
@@ -49,6 +118,17 @@ class YouTubeStreamer:
         # for a freshly-spawned restart session. Capped to avoid unbounded
         # growth across long uptimes.
         self._fired_sessions: List[str] = []
+        # Starlink-blip backoff state. start() returns False (silently) when
+        # `now < _next_attempt_ts`, so the scheduler's 2s tick effectively
+        # becomes a 4/8/16/30s tick during sustained outages. The watcher
+        # bumps `_consecutive_failures` on a fast/zero-byte death and resets
+        # to 0 on a session that ran HEALTHY_DURATION_SEC + pushed
+        # HEALTHY_BYTES.
+        self._consecutive_failures = 0
+        self._next_attempt_ts = 0.0
+        # Track DNS-suppression so we throttle warnings instead of logging
+        # every 2s during a sustained outage.
+        self._last_dns_warn_ts = 0.0
 
     def is_running(self) -> bool:
         with self._lock:
@@ -76,11 +156,51 @@ class YouTubeStreamer:
             return max(0.0, time.time() - ref)
 
     def start(self, rtsp_url: str, stream_key: str) -> bool:
+        # First do the cheap pre-checks under the lock, then drop the lock
+        # for the (potentially blocking) DNS probe so we don't wedge other
+        # callers (e.g. /api/stream/status) waiting on the resolver.
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return True
             if not stream_key.strip():
                 return False
+            now = time.time()
+            if now < self._next_attempt_ts:
+                # Still in backoff window from a previous failure. The
+                # scheduler will keep calling us each tick; we silently
+                # decline until backoff expires. Don't log here -- the
+                # last failure already logged the next_in= window.
+                return False
+
+        # Pre-flight DNS check. On Starlink, RTMP attempts during satellite
+        # handoff fail with "Temporary failure in name resolution" within
+        # ~5-10s of ffmpeg startup. Each such attempt creates a session
+        # row, fires start/end events, and clutters the broadcast history.
+        # Probing DNS first lets us skip the spawn entirely and just wait
+        # for the network to come back, with no UI noise.
+        if not _dns_ok():
+            with self._lock:
+                self._consecutive_failures += 1
+                self._next_attempt_ts = time.time() + self._compute_backoff()
+                throttle = time.time() - self._last_dns_warn_ts > 30.0
+                if throttle:
+                    self._last_dns_warn_ts = time.time()
+            if throttle:
+                logger.warning(
+                    "DNS resolve %s failed; deferring YouTube start"
+                    " (consecutive_failures=%d, next_attempt_in=%.1fs)",
+                    RTMP_HOST,
+                    self._consecutive_failures,
+                    max(0.0, self._next_attempt_ts - time.time()),
+                )
+            return False
+
+        with self._lock:
+            # Re-check liveness now that we've reacquired the lock — a
+            # concurrent caller may have started a session between the
+            # DNS probe and here.
+            if self._proc and self._proc.poll() is None:
+                return True
             self._stop.clear()
             self._last_total = 0
             self._session_id = str(uuid.uuid4())[:8]
@@ -225,13 +345,19 @@ class YouTubeStreamer:
                     logger.exception("on_session_event(start) failed")
             return True
 
+    def _compute_backoff(self) -> float:
+        """Exponential 2s, 4s, 8s, 16s, 30s, 30s, ... capped at
+        BACKOFF_MAX_SEC. Caller holds `self._lock`."""
+        n = max(0, self._consecutive_failures - 1)
+        return min(BACKOFF_MAX_SEC, BACKOFF_MIN_SEC * (2 ** n))
+
     def _watch_proc(
         self,
         proc: "subprocess.Popen[str]",
         session_id: str,
         started: float,
     ) -> None:
-        """Block on ffmpeg, then fire `session_end(end_reason="died")` if the
+        """Block on ffmpeg, then fire `session_end(end_reason=...)` if the
         process exited on its own. We bind proc/session_id/started as args so
         the watcher reports on the session it was launched for, even if a
         new session has already replaced `self._proc` / `self._session_id`
@@ -247,18 +373,42 @@ class YouTubeStreamer:
             return
         last_err = "\n".join(self._stderr_lines[-5:]) if self._stderr_lines else ""
         duration = time.time() - started if started else 0.0
+        end_reason = _classify_end(last_err)
+        # Update backoff state. A session that survived HEALTHY_DURATION_SEC
+        # AND pushed >= HEALTHY_BYTES is treated as proof the network was
+        # working; reset so the next attempt fires immediately. Anything
+        # shorter or byte-starved bumps the backoff so sustained outages
+        # don't generate dozens of broadcast-history rows per minute.
+        with self._lock:
+            healthy = (
+                duration >= HEALTHY_DURATION_SEC
+                and self._last_total >= HEALTHY_BYTES
+            )
+            if healthy:
+                self._consecutive_failures = 0
+                self._next_attempt_ts = 0.0
+                backoff = 0.0
+            else:
+                self._consecutive_failures += 1
+                backoff = self._compute_backoff()
+                self._next_attempt_ts = time.time() + backoff
         logger.warning(
-            "YouTube ffmpeg died unexpectedly session=%s rc=%s after=%.1fs bytes=%d last_stderr=%r",
+            "YouTube ffmpeg died session=%s rc=%s after=%.1fs bytes=%d"
+            " reason=%s consecutive_failures=%d next_attempt_in=%.1fs"
+            " last_stderr=%r",
             session_id,
             rc,
             duration,
             self._last_total,
+            end_reason,
+            self._consecutive_failures,
+            backoff,
             last_err[-300:],
         )
         self._fire_end(
             session_id,
             started,
-            "died",
+            end_reason,
             exit_code=rc,
             last_stderr=last_err[-1000:],
         )
@@ -313,6 +463,12 @@ class YouTubeStreamer:
             last_total = self._last_total
             last_err = "\n".join(self._stderr_lines[-5:]) if self._stderr_lines else ""
             self._proc = None
+            # An explicit stop is not a failure, even if it interrupted a
+            # short session — reset the backoff so the next scheduled
+            # start fires immediately without inheriting the previous
+            # crash counter.
+            self._consecutive_failures = 0
+            self._next_attempt_ts = 0.0
         rc: Optional[int] = None
         if proc:
             try:

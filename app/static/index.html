@@ -693,6 +693,10 @@
                 if (reason === "stopped") return "Stopped (clean)";
                 if (reason === "stalled") return "Restarted (stalled)";
                 if (reason === "orphaned") return "Ended (orphaned)";
+                if (reason === "dns") return "Network: DNS failed";
+                if (reason === "rtmp_broken_pipe") return "Network: YouTube dropped us";
+                if (reason === "network") return "Network: socket failed";
+                if (reason === "rtsp_error") return "Camera: RTSP error";
                 if (reason === "died") {
                   var rc = (s.exit_code === null || s.exit_code === undefined) ? "?" : s.exit_code;
                   return "Crashed (rc=" + rc + ")";
@@ -703,8 +707,12 @@
                 if (!s.ended_ts) {
                   return this.isSessionLive(s) ? "sess-running" : "sess-stopped";
                 }
-                if (s.end_reason === "died") return "sess-died";
-                if (s.end_reason === "stalled") return "sess-stalled";
+                var r = s.end_reason;
+                if (r === "died" || r === "rtsp_error") return "sess-died";
+                if (r === "stalled") return "sess-stalled";
+                if (r === "dns" || r === "rtmp_broken_pipe" || r === "network") {
+                  return "sess-network";
+                }
                 return "sess-stopped";
               },
               pollRec: function () {

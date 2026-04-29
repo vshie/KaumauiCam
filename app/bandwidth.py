@@ -238,7 +238,17 @@ def record_session_end(
 def recent_sessions(limit: int = 50, since_ts: Optional[float] = None) -> List[Dict[str, Any]]:
     """Return the most recent YouTube sessions, newest first. Used by the
     /api/stream/sessions endpoint and the UI's broadcast history table.
-    `since_ts` filters to sessions started at or after that Unix timestamp."""
+    `since_ts` filters to sessions started at or after that Unix timestamp.
+
+    For sessions that are still running (ended_ts IS NULL), the `bytes`
+    column on the row is whatever record_session_start() wrote on insert,
+    which is always 0 -- record_session_end() is the only writer that
+    rolls up the per-tick bandwidth deltas into the row total. To avoid
+    showing "0 B" in the UI for the currently-live broadcast, we
+    re-aggregate `bytes` from the bandwidth table at read time for any
+    row without a recorded ended_ts. Cheap because the live row is
+    indexed by session_id and contains at most a few thousand ticks.
+    """
     limit = max(1, min(int(limit), 500))
     c = _conn()
     try:
@@ -254,7 +264,18 @@ def recent_sessions(limit: int = 50, since_ts: Optional[float] = None) -> List[D
                 "FROM yt_sessions ORDER BY started_ts DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            if d.get("ended_ts") is None:
+                live = c.execute(
+                    "SELECT COALESCE(SUM(bytes), 0) FROM bandwidth WHERE session_id = ?",
+                    (d["session_id"],),
+                ).fetchone()
+                if live is not None:
+                    d["bytes"] = int(live[0] or 0)
+            out.append(d)
+        return out
     finally:
         c.close()
 

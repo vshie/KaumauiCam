@@ -209,14 +209,26 @@ class AxisCamera:
         """
         Ensure stream profile 'youtubelive' exists.
 
-        Targets a YouTube-friendly H.264 1080p30 stream with a 4500 Kbps
-        max-bitrate cap (well under the boat's 8 Mbps Starlink uplink) and
-        a 2-second keyframe interval (60 frames at 30 fps), which is what
-        YouTube Live recommends for low-latency ingest.
+        Targets a YouTube-friendly H.264 1080p30 stream with a 4500
+        Kbps MBR cap (well under the boat's 8 Mbps Starlink uplink),
+        a 2 s keyframe interval (60 frames at 30 fps) per YouTube's
+        low-latency ingest recommendation, and `videocompression=0`
+        (lowest compression / highest quality). The low-compression
+        knob is important for quiet pond scenes: H.264 produces very
+        few bits on static water no matter the cap, so we ask the
+        encoder to spend as many bits as it can within the cap to
+        keep YouTube's ingest from going below its acceptance
+        threshold.
+
+        Note: setting `videobitratemode=cbr` here triggered RTSP 400
+        Bad Request on this Axis firmware -- channel-level CBR (set
+        via `root.Image.I0.RateControl.Mode`) is the only working
+        path for true CBR on this camera, see
+        `ensure_channel_cbr()`.
         """
         return self._ensure_stream_profile(
             name="youtubelive",
-            description="Kaumaui Cam YouTube live H.264 1080p30 4.5 Mbps",
+            description="Kaumaui Cam YouTube live H.264 1080p30 4.5 Mbps cap",
             parameters=(
                 "videocodec=h264"
                 "&resolution=1920x1080"
@@ -224,6 +236,6 @@ class AxisCamera:
                 "&videobitratemode=mbr"
                 "&videomaxbitrate=4500"
                 "&videokeyframeinterval=60"
-                "&videocompression=20"
+                "&videocompression=0"
             ),
         )
