@@ -113,7 +113,9 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.2"
+_EXTENSION_VERSION = "0.3.3"
+
+YOUTUBE_STALL_TIMEOUT_SEC = 30.0
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
 
@@ -160,6 +162,20 @@ def _scheduler_loop() -> None:
                     if youtube_streamer.start(rtsp, key):
                         with _state_lock:
                             _youtube_session_start = time.time()
+                else:
+                    # Stall watchdog: ffmpeg's process can stay alive while
+                    # its internal thread queues wedge after a transient
+                    # RTMP/RTSP hiccup, leaving bytes flat-lined to YouTube
+                    # and no further stderr. If no progress bytes have been
+                    # reported for YOUTUBE_STALL_TIMEOUT_SEC, kill and let
+                    # the next iteration restart it from scratch.
+                    idle = youtube_streamer.seconds_since_last_byte()
+                    if idle > YOUTUBE_STALL_TIMEOUT_SEC:
+                        logger.warning(
+                            "YouTube ffmpeg stalled %.1fs without progress; restarting",
+                            idle,
+                        )
+                        youtube_streamer.stop()
             else:
                 if youtube_streamer.is_running():
                     youtube_streamer.stop()

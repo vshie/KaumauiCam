@@ -25,6 +25,7 @@ class YouTubeStreamer:
         self._last_total = 0
         self._session_id: Optional[str] = None
         self._session_start = 0.0
+        self._last_byte_time = 0.0
         self._stderr_lines: List[str] = []
         self._stop = threading.Event()
 
@@ -40,6 +41,19 @@ class YouTubeStreamer:
                 "stderr_tail": self._stderr_lines[-20:],
             }
 
+    def seconds_since_last_byte(self) -> float:
+        """How long since the last RTMP byte was reported by ffmpeg's
+        `-progress` output. Used by the supervisor watchdog to detect a
+        wedged ffmpeg pipeline (process alive but bytes flat-lined). Returns
+        0.0 when no session has started yet."""
+        with self._lock:
+            if self._proc is None or self._proc.poll() is not None:
+                return 0.0
+            ref = self._last_byte_time or self._session_start
+            if ref <= 0:
+                return 0.0
+            return max(0.0, time.time() - ref)
+
     def start(self, rtsp_url: str, stream_key: str) -> bool:
         with self._lock:
             if self._proc and self._proc.poll() is None:
@@ -50,6 +64,7 @@ class YouTubeStreamer:
             self._last_total = 0
             self._session_id = str(uuid.uuid4())[:8]
             self._session_start = time.time()
+            self._last_byte_time = self._session_start
             self._stderr_lines = []
             out_url = f"{RTMP_BASE}/{stream_key.strip()}"
             # Axis RTSP packets often arrive without a PTS, which the FLV/RTMP
@@ -73,6 +88,13 @@ class YouTubeStreamer:
             #     audio) the timelines drift slightly at startup; -shortest
             #     interpreted that drift as one input ending and dropped
             #     ~90% of video frames before muxing.
+            # ffmpeg defaults `thread_queue_size` to 8 packets per input,
+            # which is ~270ms at 30fps. A single Starlink/RTMP transient
+            # stall easily exceeds that; once an input thread blocks on a
+            # full queue, the muxer thread can wedge and bytes stop flowing
+            # while the process stays alive. Bumping to 1024 packets gives
+            # ~30s of headroom and matches the supervisor's stall watchdog
+            # window so we self-heal before falling off the queue.
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
@@ -82,10 +104,14 @@ class YouTubeStreamer:
                 "+genpts+igndts",
                 "-rtsp_transport",
                 "tcp",
+                "-thread_queue_size",
+                "1024",
                 "-i",
                 rtsp_url,
                 "-f",
                 "lavfi",
+                "-thread_queue_size",
+                "512",
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-map",
@@ -129,6 +155,7 @@ class YouTubeStreamer:
                             delta = total - self._last_total
                             if delta > 0:
                                 self._on_delta(delta, self._session_id)
+                                self._last_byte_time = time.time()
                             self._last_total = total
                 except Exception as e:
                     logger.debug("progress reader: %s", e)
