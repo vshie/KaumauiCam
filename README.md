@@ -57,7 +57,7 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 ### YouTube
 
-- Ingest uses **default** RTSP (no `streamprofile`) — **H.264** passthrough; audio is re-encoded to stereo AAC for compatibility.
+- Ingest uses **default** RTSP (no `streamprofile`) — **H.264** passthrough, **video-only** (no audio track is sent to YouTube; the channel is silent by design). The only ffmpeg input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; everything else is a true stream-copy so the Pi never re-encodes 1080p.
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
 
 ### Recordings

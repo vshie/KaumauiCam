@@ -81,7 +81,7 @@
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Uses camera default H.264 RTSP (not FishPond). YouTube RTMP requires H.264 + AAC.</p>
+              <p class="status-line">Uses camera default H.264 RTSP (not FishPond), stream-copied to YouTube — video-only, no re-encoding on the Pi.</p>
               <label>Stream key (paste from YouTube Studio → Stream)</label>
               <textarea v-model="ytKey" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
               <schedule-editor v-model="draftYt" />

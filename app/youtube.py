@@ -52,46 +52,38 @@ class YouTubeStreamer:
             self._session_start = time.time()
             self._stderr_lines = []
             out_url = f"{RTMP_BASE}/{stream_key.strip()}"
-            # Axis RTSP is usually video-only, and packets can arrive without
-            # PTS. FLV/RTMP requires monotonic PTS + an audio track, so we:
-            #   - force wall-clock timestamps on the RTSP input and regenerate
-            #     missing PTS (+genpts, +igndts) before stream copy,
-            #   - inject a silent AAC track as input 1 so YouTube sees audio,
-            #   - disable FLV's duration/filesize header rewrite (live stream).
+            # Axis RTSP packets often arrive without a PTS, which the FLV/RTMP
+            # muxer rejects ("Packet is missing PTS"). +genpts+igndts lets
+            # ffmpeg regenerate timestamps from the input frame timing so we
+            # can stream-copy H.264 straight through to YouTube.
+            #
+            # Things we deliberately do NOT do (each measured to throttle the
+            # actual bitrate reaching YouTube on this Pi/Axis combo):
+            #   - +nobuffer: drops bursty packets aggressively, kept only ~30%
+            #     of frames in testing.
+            #   - -use_wallclock_as_timestamps 1: rewriting PTS to wall clock
+            #     halved the egress bitrate even with +genpts present.
+            #   - silent anullsrc + -shortest: lavfi audio uses a different
+            #     timeline than the wall-clock-stamped video, which combined
+            #     with -shortest caused ffmpeg to drop ~90% of video frames.
+            #     YouTube Live accepts video-only RTMP, so we stream pure
+            #     video and let the channel be silent.
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel",
                 "warning",
                 "-fflags",
-                "+genpts+igndts+nobuffer",
-                "-use_wallclock_as_timestamps",
-                "1",
+                "+genpts+igndts",
                 "-rtsp_transport",
                 "tcp",
                 "-i",
                 rtsp_url,
-                "-f",
-                "lavfi",
-                "-i",
-                "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-map",
                 "0:v:0",
-                "-map",
-                "1:a:0",
+                "-an",
                 "-c:v",
                 "copy",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-ar",
-                "44100",
-                "-ac",
-                "2",
-                "-shortest",
-                "-max_muxing_queue_size",
-                "1024",
                 "-f",
                 "flv",
                 "-flvflags",
