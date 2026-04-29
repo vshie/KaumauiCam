@@ -81,7 +81,7 @@
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube — video-only, no re-encoding on the Pi.</p>
+              <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
               <label>Stream key (paste from YouTube Studio → Stream)</label>
               <textarea v-model="ytKey" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
               <schedule-editor v-model="draftYt" />

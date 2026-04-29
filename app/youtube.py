@@ -57,17 +57,22 @@ class YouTubeStreamer:
             # ffmpeg regenerate timestamps from the input frame timing so we
             # can stream-copy H.264 straight through to YouTube.
             #
+            # YouTube Live requires an audio track to register a broadcast as
+            # live — a video-only RTMP feed is accepted at the network layer
+            # (no ffmpeg errors) but the dashboard never shows it. We mix in
+            # a silent AAC track from lavfi so YouTube sees a complete A/V
+            # stream. anullsrc is essentially free CPU-wise.
+            #
             # Things we deliberately do NOT do (each measured to throttle the
             # actual bitrate reaching YouTube on this Pi/Axis combo):
             #   - +nobuffer: drops bursty packets aggressively, kept only ~30%
             #     of frames in testing.
             #   - -use_wallclock_as_timestamps 1: rewriting PTS to wall clock
             #     halved the egress bitrate even with +genpts present.
-            #   - silent anullsrc + -shortest: lavfi audio uses a different
-            #     timeline than the wall-clock-stamped video, which combined
-            #     with -shortest caused ffmpeg to drop ~90% of video frames.
-            #     YouTube Live accepts video-only RTMP, so we stream pure
-            #     video and let the channel be silent.
+            #   - -shortest: with two open-ended inputs (RTSP video + lavfi
+            #     audio) the timelines drift slightly at startup; -shortest
+            #     interpreted that drift as one input ending and dropped
+            #     ~90% of video frames before muxing.
             cmd = [
                 "ffmpeg",
                 "-hide_banner",
@@ -79,11 +84,20 @@ class YouTubeStreamer:
                 "tcp",
                 "-i",
                 rtsp_url,
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=channel_layout=stereo:sample_rate=44100",
                 "-map",
                 "0:v:0",
-                "-an",
+                "-map",
+                "1:a:0",
                 "-c:v",
                 "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "64k",
                 "-f",
                 "flv",
                 "-flvflags",

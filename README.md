@@ -58,7 +58,7 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 ### YouTube
 
-- Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps) — **H.264 passthrough, video-only** (no audio track is sent to YouTube; the channel is silent by design). The only ffmpeg input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; everything else is a true stream-copy so the Pi never re-encodes 1080p.
+- Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps). Video is **stream-copied** (no re-encoding on the Pi), and a silent AAC audio track is mixed in from `lavfi anullsrc` because YouTube Live only registers a broadcast as live when an audio track is present. The only video input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; we deliberately do **not** use `+nobuffer`, `-use_wallclock_as_timestamps`, or `-shortest` (each was measured to drop ~70–90% of video frames before they reached the muxer).
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
 
 ### Recordings
