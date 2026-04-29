@@ -62,6 +62,18 @@ class Recorder:
             }
 
     def _build_cmd(self, out_path: str) -> List[str]:
+        # Queue settings are deliberately tuned for *recording* fidelity, not
+        # live-display robustness:
+        #   - leaky=no: under USB write stalls / mp4mux flush hiccups, apply
+        #     backpressure all the way back to rtspsrc instead of silently
+        #     dropping the newest frames. We'd rather see an explicit error
+        #     than quietly produce a sparser MP4 that's missing training
+        #     data. (The previous default of leaky=downstream + silent=true
+        #     would absorb up to 30s of stalls as invisible frame loss.)
+        #   - max-size-time=2s: enough to absorb normal write jitter; small
+        #     enough that real stalls surface fast.
+        #   - silent=false: queue overrun/underrun events are logged so the
+        #     status endpoint's stderr_tail captures them.
         return [
             "gst-launch-1.0",
             "-e",
@@ -78,11 +90,11 @@ class Recorder:
             "config-interval=-1",
             "!",
             "queue",
-            "max-size-time=30000000000",
+            "max-size-time=2000000000",
             "max-size-bytes=0",
             "max-size-buffers=0",
-            "leaky=downstream",
-            "silent=true",
+            "leaky=no",
+            "silent=false",
             "!",
             "mp4mux",
             "fragment-duration=5000",

@@ -113,7 +113,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.1"
+_EXTENSION_VERSION = "0.3.2"
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
 
