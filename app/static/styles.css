@@ -698,6 +698,97 @@ tr.sess-stopped td { color: var(--muted); }
   opacity: 0.9;
 }
 
+/* Variants of `.badge` used by the link-uptime header. Default `.badge`
+   uses the green palette; `.badge-good` reaffirms that, `.badge-bad`
+   inverts to the danger palette so a Starlink outage reads at a glance.
+   Keep these alongside the base badge so they stay in sync visually. */
+.badge-good {
+  background: var(--green-soft);
+  color: var(--green);
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.badge-bad {
+  background: rgba(251, 113, 133, 0.14);
+  color: var(--danger);
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+/* Amber palette for "in-between" warnings, e.g. "YouTube hasn't yet
+   promoted the broadcast" -- not green, not red, but worth showing. */
+.badge-warn {
+  background: rgba(249, 226, 175, 0.16);
+  color: #f9e2af;
+  border-color: rgba(249, 226, 175, 0.4);
+}
+
+/* Inline row used by single-line checkbox toggles outside the schedule
+   editor (e.g. the "Auto-restart on YouTube health" switch on the
+   stream page). Mirrors the schedule editor's check label spacing
+   without inheriting its grid context. */
+.ck-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0.2rem;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+.ck-row input[type="checkbox"] {
+  margin: 0;
+}
+
+/* Status-page-style ribbon: each <rect> is one bucket (5 min by default).
+   The SVG fills the available width via preserveAspectRatio="none" so the
+   number of buckets doesn't blow up the layout on narrow screens. */
+.uptime-graph-wrap {
+  margin: 0.55rem 0 0.35rem;
+}
+
+.uptime-graph {
+  display: block;
+  width: 100%;
+  height: 44px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.uptime-bar {
+  fill: var(--green);
+}
+
+.uptime-bar.uptime-up {
+  fill: #4ade80;
+}
+
+.uptime-bar.uptime-warn {
+  fill: #fab387;
+}
+
+.uptime-bar.uptime-bad {
+  fill: #f9a8b4;
+}
+
+.uptime-bar.uptime-down {
+  fill: #fb7185;
+}
+
+.uptime-bar.uptime-empty {
+  fill: rgba(143, 179, 196, 0.18);
+}
+
+.uptime-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  padding: 0 0.1rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
 @media (max-width: 560px) {
   .sched-ruler-label {
     font-size: 0.6rem;

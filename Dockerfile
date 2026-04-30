@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     exfat-fuse \
     exfatprogs \
     ntfs-3g \
+    iputils-ping \
     psmisc \
     && rm -rf /var/lib/apt/lists/*
 

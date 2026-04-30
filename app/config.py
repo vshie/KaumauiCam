@@ -29,6 +29,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "recordings_profile": "DefaultFishPond",
     "monthly_quota_gb": 100.0,
     "bandwidth_overhead_pct": 3.0,
+    # YouTube broadcast health monitor (see app/youtube_monitor.py).
+    # ``youtube_channel_url`` is the public-channel-page URL (any of
+    # /@handle, /@handle/streams, /@handle/live, /channel/UC..., bare
+    # @handle) whose ``/live`` endpoint we poll to confirm the broadcast
+    # is actually live to viewers. Empty string disables the monitor.
+    # ``youtube_health_autorestart`` enables the supervisor watchdog
+    # that force-restarts ffmpeg when YouTube has confirmed the stream
+    # is not live for ``youtube_health_unhealthy_grace_secs`` while we
+    # expect it to be -- i.e. the "Preparing stream" lockup recovery.
+    "youtube_channel_url": "",
+    "youtube_health_autorestart": True,
+    "youtube_health_unhealthy_grace_secs": 90.0,
+    "youtube_health_min_session_age_secs": 60.0,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

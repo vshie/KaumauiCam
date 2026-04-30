@@ -84,16 +84,64 @@
               <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
               <label>Stream key (paste from YouTube Studio → Stream)</label>
               <textarea v-model="ytKey" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
+              <label>Public channel URL (for live-health monitor)</label>
+              <input type="text" v-model="ytChannelUrl" placeholder="https://www.youtube.com/@yourchannel" />
+              <p class="status-line hint">Paste your channel URL (any of <code>/@handle</code>, <code>/@handle/streams</code>, <code>/@handle/live</code>, or <code>/channel/UC…</code>). Required for the YouTube-side health check below — only works if your live broadcasts are <strong>public</strong> (unlisted/private streams won't appear on the channel <code>/live</code> page).</p>
+              <label class="ck-row">
+                <input type="checkbox" v-model="ytAutorestart" />
+                Auto-restart ffmpeg if YouTube confirms the stream is not live for {{ Math.round(ytGraceSecs) }}s
+              </label>
               <schedule-editor v-model="draftYt" />
               <div class="row">
                 <button type="button" class="btn" @click="saveYoutube">Save</button>
                 <button type="button" class="btn" @click="startYoutubeNow">Start now</button>
                 <button type="button" class="btn btn-danger" @click="stopYoutube">Stop</button>
               </div>
+              <h2 class="h2-spaced">
+                YouTube health
+                <span class="badge" :class="ytHealthBadgeClass">{{ ytHealthBadgeText }}</span>
+                <span class="badge badge-muted" v-if="ytHealthPollText">poll {{ ytHealthPollText }}</span>
+              </h2>
+              <p class="status-line">{{ ytHealthLine }}</p>
+              <p class="status-line" v-if="ytHealthVideoUrl">
+                <a :href="ytHealthVideoUrl" target="_blank" rel="noopener noreferrer">Open on YouTube ↗</a>
+                <span v-if="ytHealthTitle"> · {{ ytHealthTitle }}</span>
+              </p>
               <h2 class="h2-spaced">Bandwidth <span class="badge badge-muted">Starlink</span></h2>
               <p class="status-line">{{ bwText }}</p>
               <div class="bar"><div :style="{ width: bwBarPct + '%' }"></div></div>
               <p class="status-line">{{ ytStderr }}</p>
+              <h2 class="h2-spaced">
+                Link uptime
+                <span class="badge" :class="linkBadgeClass">{{ linkBadgeText }}</span>
+                <span class="badge badge-muted">ping {{ linkTarget }} · last 24h</span>
+              </h2>
+              <p class="status-line">{{ linkText }}</p>
+              <div class="uptime-graph-wrap" v-if="linkBuckets.length">
+                <svg
+                  class="uptime-graph"
+                  :viewBox="'0 0 ' + linkBuckets.length + ' 100'"
+                  preserveAspectRatio="none"
+                  role="img"
+                  aria-label="Starlink uptime, last 24 hours"
+                >
+                  <rect
+                    v-for="(b, i) in linkBuckets"
+                    :key="i"
+                    :x="i + 0.06"
+                    y="0"
+                    width="0.88"
+                    height="100"
+                    :class="'uptime-bar ' + bucketClass(b)"
+                  >
+                    <title>{{ bucketTitle(b) }}</title>
+                  </rect>
+                </svg>
+                <div class="uptime-axis" aria-hidden="true">
+                  <span>−24h</span><span>−18h</span><span>−12h</span><span>−6h</span><span>now</span>
+                </div>
+              </div>
+              <p class="status-line hint" v-else>Collecting uptime samples…</p>
               <h2 class="h2-spaced">Broadcast history <span class="badge badge-muted">last 24h</span></h2>
               <p class="status-line hint" v-if="!streamSessions.length">No sessions in the last 24 hours.</p>
               <div class="table-wrap" v-if="streamSessions.length">
@@ -544,6 +592,9 @@
                 camUser: "",
                 camPass: "",
                 ytKey: "",
+                ytChannelUrl: "",
+                ytAutorestart: true,
+                ytGraceSecs: 90,
                 quotaGb: 100,
                 overheadPct: 3,
                 recStorage: "auto",
@@ -557,8 +608,19 @@
                 bwText: "—",
                 bwBarPct: 0,
                 ytStderr: "Idle.",
+                ytHealthBadgeText: "—",
+                ytHealthBadgeClass: "",
+                ytHealthLine: "Configure a channel URL above to enable.",
+                ytHealthPollText: "",
+                ytHealthVideoUrl: "",
+                ytHealthTitle: "",
                 streamSessions: [],
                 liveSessionId: null,
+                linkText: "Collecting samples…",
+                linkBadgeText: "—",
+                linkBadgeClass: "",
+                linkTarget: "8.8.8.8",
+                linkBuckets: [],
                 recStatusLine: "—",
                 recFiles: [],
                 pc: null,
@@ -602,6 +664,11 @@
                     self.camUser = c.camera_user || "";
                     self.camPass = c.camera_pass || "";
                     self.ytKey = c.youtube_stream_key || "";
+                    self.ytChannelUrl = c.youtube_channel_url || "";
+                    self.ytAutorestart = c.youtube_health_autorestart !== false;
+                    self.ytGraceSecs = c.youtube_health_unhealthy_grace_secs != null
+                      ? c.youtube_health_unhealthy_grace_secs
+                      : 90;
                     self.quotaGb = c.monthly_quota_gb != null ? c.monthly_quota_gb : 100;
                     self.overheadPct = c.bandwidth_overhead_pct != null ? c.bandwidth_overhead_pct : 3;
                     self.recStorage = c.recordings_storage || "auto";
@@ -645,6 +712,81 @@
                   self.pollPtz();
                 }, ms);
               },
+              applyYtHealth: function (h, encoderRunning, fullStatus) {
+                // Render the YouTube-side health observation. We have
+                // four practical UX states:
+                //   - disabled / no channel URL: tell the user how to opt in.
+                //   - live: green badge, viewer count + start time.
+                //   - encoder running but YouTube not live: warn (and
+                //     escalate to error once the unhealthy window has
+                //     run long enough that the auto-restart watchdog
+                //     would fire).
+                //   - encoder idle: muted "not broadcasting" line --
+                //     true but uninteresting.
+                if (!this.ytChannelUrl) {
+                  this.ytHealthBadgeText = "Disabled";
+                  this.ytHealthBadgeClass = "badge-muted";
+                  this.ytHealthLine = "Configure a channel URL above to enable.";
+                  this.ytHealthPollText = "";
+                  this.ytHealthVideoUrl = "";
+                  this.ytHealthTitle = "";
+                  return;
+                }
+                if (!h) {
+                  this.ytHealthBadgeText = "Loading…";
+                  this.ytHealthBadgeClass = "";
+                  this.ytHealthLine = "Waiting for first poll…";
+                  this.ytHealthPollText = "";
+                  return;
+                }
+                this.ytHealthVideoUrl = h.video_url || "";
+                this.ytHealthTitle = h.title || "";
+                this.ytHealthPollText = h.last_poll_ts
+                  ? this.fmtRelative(h.last_poll_ts, h.now)
+                  : "";
+                if (h.state === "live") {
+                  this.ytHealthBadgeText = "Live on YouTube";
+                  this.ytHealthBadgeClass = "badge-good";
+                  var v = (h.viewers != null) ? (" · " + h.viewers + " watching") : "";
+                  var since = h.last_live_ts ? (" · last seen live " + this.fmtRelative(h.last_live_ts, h.now)) : "";
+                  this.ytHealthLine = "YouTube confirms broadcast is live" + v + since;
+                  return;
+                }
+                if (h.state === "error") {
+                  this.ytHealthBadgeText = "Check failed";
+                  this.ytHealthBadgeClass = "badge-bad";
+                  this.ytHealthLine = "Could not reach the channel page" + (h.error ? " (" + h.error + ")" : "") + ".";
+                  return;
+                }
+                // not_live or disabled-from-server.
+                if (encoderRunning) {
+                  var bad = h.unhealthy_for_secs || 0;
+                  var grace = (fullStatus && fullStatus.youtube_health && fullStatus.youtube_health.spinup_grace_secs) || 60;
+                  var sessionAge = (fullStatus && fullStatus.session_age_secs) || 0;
+                  if (sessionAge < grace) {
+                    this.ytHealthBadgeText = "Spinning up";
+                    this.ytHealthBadgeClass = "";
+                    this.ytHealthLine = "Encoder running for " + Math.round(sessionAge) + "s · waiting for YouTube to register the broadcast.";
+                  } else if (bad >= (this.ytGraceSecs || 90)) {
+                    this.ytHealthBadgeText = "Not live!";
+                    this.ytHealthBadgeClass = "badge-bad";
+                    this.ytHealthLine =
+                      "Encoder is streaming but YouTube has shown no picture for " +
+                      Math.round(bad) + "s." +
+                      (this.ytAutorestart ? " Watchdog will force-restart ffmpeg." : " Auto-restart disabled.");
+                  } else {
+                    this.ytHealthBadgeText = "Not yet live";
+                    this.ytHealthBadgeClass = "badge-warn";
+                    this.ytHealthLine =
+                      "Encoder is streaming but YouTube hasn't promoted the broadcast" +
+                      (bad ? " (for " + Math.round(bad) + "s)" : "") + ".";
+                  }
+                } else {
+                  this.ytHealthBadgeText = "Idle";
+                  this.ytHealthBadgeClass = "badge-muted";
+                  this.ytHealthLine = "Not broadcasting.";
+                }
+              },
               pollStream: function () {
                 var self = this;
                 this.api("GET", "/api/stream/status")
@@ -659,6 +801,7 @@
                     if (s.running) self.ytStderr = "Streaming · session " + self.fmtBytes(s.session_bytes || 0);
                     else self.ytStderr = ((s.stderr_tail || []).slice(-5).join(" | ") || "Idle.");
                     self.liveSessionId = (s.running && s.session_id) ? s.session_id : null;
+                    self.applyYtHealth(s.youtube_health || null, !!s.running, s);
                   })
                   .catch(function () {});
                 this.api("GET", "/api/stream/sessions?limit=50")
@@ -692,6 +835,7 @@
                 var reason = s.end_reason || "ended";
                 if (reason === "stopped") return "Stopped (clean)";
                 if (reason === "stalled") return "Restarted (stalled)";
+                if (reason === "yt_unhealthy") return "Restarted (YouTube not live)";
                 if (reason === "orphaned") return "Ended (orphaned)";
                 if (reason === "dns") return "Network: DNS failed";
                 if (reason === "rtmp_broken_pipe") return "Network: YouTube dropped us";
@@ -709,11 +853,89 @@
                 }
                 var r = s.end_reason;
                 if (r === "died" || r === "rtsp_error") return "sess-died";
-                if (r === "stalled") return "sess-stalled";
+                if (r === "stalled" || r === "yt_unhealthy") return "sess-stalled";
                 if (r === "dns" || r === "rtmp_broken_pipe" || r === "network") {
                   return "sess-network";
                 }
                 return "sess-stopped";
+              },
+              fmtRelative: function (ts, now) {
+                if (!ts) return "never";
+                now = now || Date.now() / 1000;
+                var d = Math.max(0, Math.round(now - ts));
+                if (d < 60) return d + "s ago";
+                if (d < 3600) return Math.floor(d / 60) + "m ago";
+                if (d < 86400) return Math.floor(d / 3600) + "h ago";
+                return Math.floor(d / 86400) + "d ago";
+              },
+              bucketClass: function (b) {
+                if (!b || !b.checks) return "uptime-empty";
+                var p = b.uptime_pct;
+                if (p == null) return "uptime-empty";
+                if (p >= 99.5) return "uptime-up";
+                if (p >= 90) return "uptime-warn";
+                if (p > 0) return "uptime-bad";
+                return "uptime-down";
+              },
+              bucketTitle: function (b) {
+                if (!b) return "";
+                var ts = (b.ts || 0) * 1000;
+                var label;
+                try {
+                  label = new Intl.DateTimeFormat(undefined, {
+                    timeZone: SCHEDULE_TIMEZONE,
+                    month: "short",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: false,
+                  }).format(new Date(ts));
+                } catch (e) {
+                  label = new Date(ts).toLocaleString();
+                }
+                if (!b.checks) return label + " · no data";
+                var pct = (b.uptime_pct == null) ? "—" : b.uptime_pct.toFixed(1) + "%";
+                var rtt = (b.avg_rtt_ms == null) ? "" : " · " + Math.round(b.avg_rtt_ms) + " ms";
+                return label + " · " + pct + " (" + b.successes + "/" + b.checks + ")" + rtt;
+              },
+              pollLink: function () {
+                var self = this;
+                this.api("GET", "/api/link/status")
+                  .then(function (s) {
+                    var s24 = s.summary_24h || {};
+                    var pct = (s24.uptime_pct == null) ? null : s24.uptime_pct;
+                    var pctText = (pct == null) ? "—" : pct.toFixed(2) + "%";
+                    if (s.ping_unavailable) {
+                      self.linkBadgeText = "Probe missing";
+                      self.linkBadgeClass = "badge-bad";
+                      self.linkText = "ping binary unavailable in container — uptime tracking disabled.";
+                    } else if (s.up) {
+                      self.linkBadgeText = "Online";
+                      self.linkBadgeClass = "badge-good";
+                      var rtt = (s.last_rtt_ms == null) ? "" : " · " + Math.round(s.last_rtt_ms) + " ms";
+                      self.linkText =
+                        "24h uptime " + pctText + rtt +
+                        (s24.avg_rtt_ms != null ? " · avg " + Math.round(s24.avg_rtt_ms) + " ms" : "") +
+                        (s.last_failure_ts ? " · last drop " + self.fmtRelative(s.last_failure_ts, s.now) : " · no recent drops");
+                    } else if (s.last_check_ts) {
+                      self.linkBadgeText = "Offline (" + (s.consecutive_failures || 0) + " missed)";
+                      self.linkBadgeClass = "badge-bad";
+                      self.linkText =
+                        "Down · last reply " + self.fmtRelative(s.last_success_ts, s.now) +
+                        " · 24h uptime " + pctText;
+                    } else {
+                      self.linkBadgeText = "Starting";
+                      self.linkBadgeClass = "";
+                      self.linkText = "Waiting for first probe…";
+                    }
+                    self.linkTarget = s.target || "8.8.8.8";
+                  })
+                  .catch(function () {});
+                this.api("GET", "/api/link/buckets?window=86400&bucket=300")
+                  .then(function (r) {
+                    self.linkBuckets = (r && r.buckets) || [];
+                  })
+                  .catch(function () {});
               },
               pollRec: function () {
                 var self = this;
@@ -811,11 +1033,14 @@
                 var self = this;
                 this.api("POST", "/api/config", {
                   youtube_stream_key: String(this.ytKey || "").trim(),
+                  youtube_channel_url: String(this.ytChannelUrl || "").trim(),
+                  youtube_health_autorestart: !!this.ytAutorestart,
                   youtube_schedule: this.draftYt,
                 }).then(function () {
                   clearStoredDraft("yt");
                   alert("Saved.");
                   self.loadConfig({ force: true });
+                  self.pollStream();
                 });
               },
               startYoutubeNow: function () {
@@ -959,6 +1184,7 @@
                 self.pollStream();
                 self.pollRec();
                 self.pollStorage();
+                self.pollLink();
               });
               setInterval(function () {
                 self.pollStream();
@@ -969,6 +1195,9 @@
               setInterval(function () {
                 self.pollStorage();
               }, 10000);
+              setInterval(function () {
+                self.pollLink();
+              }, 15000);
             },
           }).mount("#app");
         }

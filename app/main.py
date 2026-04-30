@@ -14,6 +14,8 @@ from flask import Flask, Response, jsonify, request, send_from_directory, send_f
 
 import bandwidth
 import config as cfgmod
+import link_uptime
+import youtube_monitor
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import Recorder
@@ -84,6 +86,17 @@ STREAM_STALL_SECS = 30.0
 def _camera() -> AxisCamera:
     c = cfgmod.load()
     return AxisCamera(c["camera_host"], c["camera_user"], c["camera_pass"])
+
+
+def _youtube_session_age_secs() -> float:
+    """Seconds since the current YouTube ffmpeg session started, or 0
+    if no session is running. Exposed as a closure to youtube_monitor so
+    the spinup-grace logic doesn't have to peek into _state_lock itself."""
+    with _state_lock:
+        t0 = _youtube_session_start
+    if not t0 or not youtube_streamer.is_running():
+        return 0.0
+    return max(0.0, time.time() - t0)
 
 
 def _recording_dir(cfg: Dict[str, Any]) -> Tuple[str, str]:
@@ -216,6 +229,43 @@ def _scheduler_loop() -> None:
                             stalled,
                         )
                         youtube_streamer.stop(reason="stalled")
+                    else:
+                        # YouTube-side health watchdog: catches the case
+                        # where ffmpeg is happily pushing bytes (stall
+                        # watchdog above is satisfied) but YouTube has
+                        # not promoted the broadcast to live -- the
+                        # "Preparing stream" lockup we hit on
+                        # 2026-04-30. youtube_monitor polls the channel
+                        # /live page and exposes how long it has
+                        # confirmed the broadcast is not live; only
+                        # restart once that confirmation has stood for
+                        # the configured grace window.
+                        if cfg.get("youtube_health_autorestart", True):
+                            grace = float(
+                                cfg.get("youtube_health_unhealthy_grace_secs", 90.0)
+                            )
+                            min_age = float(
+                                cfg.get("youtube_health_min_session_age_secs", 60.0)
+                            )
+                            with _state_lock:
+                                yt_t0 = _youtube_session_start
+                            session_age = (
+                                (time.time() - yt_t0) if yt_t0 else 0.0
+                            )
+                            unhealthy = youtube_monitor.unhealthy_for_secs()
+                            if (
+                                session_age >= min_age
+                                and unhealthy >= grace
+                            ):
+                                logger.warning(
+                                    "YouTube confirmed not live for %.0fs"
+                                    " while ffmpeg streaming (session_age=%.0fs);"
+                                    " force-restart",
+                                    unhealthy,
+                                    session_age,
+                                )
+                                youtube_streamer.stop(reason="yt_unhealthy")
+                                youtube_monitor.reset_unhealthy_clock()
             else:
                 if youtube_streamer.is_running():
                     youtube_streamer.stop()
@@ -339,6 +389,14 @@ def api_config():
             go2rtc_sup.start()
         except Exception as e:
             logger.warning("go2rtc reload after config: %s", e)
+    # Wake the YouTube health monitor when channel-URL config changes so
+    # the operator gets a fresh live/not-live readout within ~1s of
+    # saving rather than waiting up to a full poll interval.
+    if "youtube_channel_url" in data:
+        try:
+            youtube_monitor.poke()
+        except Exception:
+            logger.exception("youtube_monitor.poke after config save failed")
     return jsonify(out)
 
 
@@ -436,8 +494,61 @@ def stream_status():
     if youtube_streamer.is_running() and t0:
         sess = bandwidth.session_sum_since(t0, st.get("session_id"))
     bw = bandwidth.status(cfg.get("bandwidth_overhead_pct", 3), cfg.get("monthly_quota_gb", 0))
-    st.update({"bandwidth": bw, "session_bytes": sess, "force": yf})
+    yt_health = youtube_monitor.latest()
+    st.update(
+        {
+            "bandwidth": bw,
+            "session_bytes": sess,
+            "force": yf,
+            "session_age_secs": (time.time() - t0) if (t0 and youtube_streamer.is_running()) else 0.0,
+            "youtube_health": yt_health,
+            "youtube_health_autorestart": bool(cfg.get("youtube_health_autorestart", True)),
+        }
+    )
     return jsonify(st)
+
+
+@app.route("/api/stream/youtube_health", methods=["GET"])
+def stream_yt_health():
+    """Latest YouTube-side broadcast health observation. Mirrors what
+    we attach to /api/stream/status, separated for tools that just want
+    the YouTube poll result without the encoder fields."""
+    return jsonify(youtube_monitor.latest())
+
+
+@app.route("/api/stream/youtube_health/poke", methods=["POST"])
+def stream_yt_health_poke():
+    """Wake the YouTube health monitor immediately. The settings page
+    calls this after saving a channel URL so the operator sees a fresh
+    poll result without waiting up to POLL_INTERVAL_SECS."""
+    youtube_monitor.poke()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/stream/youtube_health/history", methods=["GET"])
+def stream_yt_health_history():
+    """Recent yt_health rows (default last 24h). Used by an optional
+    health-history view; the stream page itself just reads ``latest()``
+    via /api/stream/status."""
+    try:
+        limit = int(request.args.get("limit", 200))
+    except (TypeError, ValueError):
+        limit = 200
+    raw_since = request.args.get("since")
+    if raw_since is None:
+        since = time.time() - 24 * 3600
+    else:
+        try:
+            since = float(raw_since)
+        except (TypeError, ValueError):
+            since = time.time() - 24 * 3600
+    return jsonify(
+        {
+            "rows": youtube_monitor.recent(limit=limit, since_ts=since),
+            "since": since,
+            "now": time.time(),
+        }
+    )
 
 
 @app.route("/api/stream/sessions", methods=["GET"])
@@ -466,6 +577,46 @@ def stream_sessions():
 def bw_status():
     cfg = cfgmod.load()
     return jsonify(bandwidth.status(cfg.get("bandwidth_overhead_pct", 3), cfg.get("monthly_quota_gb", 0)))
+
+
+@app.route("/api/link/status", methods=["GET"])
+def link_status():
+    """Current Starlink link state (last ping result, 24h uptime %, etc.).
+
+    The data behind this endpoint is gathered by a background ping thread
+    that started at boot (see ``link_uptime.start()``), so it accurately
+    reflects link history even across periods when the UI couldn't load."""
+    return jsonify(link_uptime.status())
+
+
+@app.route("/api/link/buckets", methods=["GET"])
+def link_buckets():
+    """Aggregated uptime buckets for the uptime graph.
+
+    ``window`` (seconds, default 24h, max 30d) is the time range ending
+    at "now". ``bucket`` (seconds, default 5min) is the bucket width;
+    each bucket reports total checks, successes, and average RTT, with
+    empty buckets explicitly returned as ``checks=0`` so the UI can
+    render gaps for periods when no probes ran."""
+    try:
+        window_secs = int(request.args.get("window", 24 * 3600))
+    except (TypeError, ValueError):
+        window_secs = 24 * 3600
+    try:
+        bucket_secs = int(request.args.get("bucket", 300))
+    except (TypeError, ValueError):
+        bucket_secs = 300
+    window_secs = max(60, min(window_secs, 30 * 24 * 3600))
+    bucket_secs = max(30, min(bucket_secs, 24 * 3600))
+    since = time.time() - window_secs
+    return jsonify(
+        {
+            "window_secs": window_secs,
+            "bucket_secs": bucket_secs,
+            "now": time.time(),
+            "buckets": link_uptime.buckets(since, bucket_secs),
+        }
+    )
 
 
 @app.route("/api/bandwidth/reset", methods=["POST"])
@@ -723,6 +874,14 @@ def main() -> None:
     except Exception:
         logger.exception("bandwidth.init_db failed")
     try:
+        link_uptime.init_db()
+    except Exception:
+        logger.exception("link_uptime.init_db failed")
+    try:
+        youtube_monitor.init_db()
+    except Exception:
+        logger.exception("youtube_monitor.init_db failed")
+    try:
         cfgmod.load()
     except Exception:
         logger.exception("config load failed")
@@ -730,6 +889,25 @@ def main() -> None:
         start_probe()
     except Exception:
         logger.exception("USB probe start failed")
+    # Start the uptime probe immediately so we begin recording link history
+    # before anything else (camera/go2rtc/scheduler can take seconds and we
+    # want the very first outage caught even during boot).
+    try:
+        link_uptime.start()
+    except Exception:
+        logger.exception("link_uptime.start failed")
+    # YouTube health monitor reads channel URL + streamer state on every
+    # tick via these closures, so config edits are picked up immediately
+    # (no monitor restart) and we don't have to thread cfgmod into the
+    # module itself.
+    try:
+        youtube_monitor.start(
+            get_channel_url=lambda: cfgmod.load().get("youtube_channel_url", "") or "",
+            get_streamer_running=youtube_streamer.is_running,
+            get_session_age_secs=_youtube_session_age_secs,
+        )
+    except Exception:
+        logger.exception("youtube_monitor.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

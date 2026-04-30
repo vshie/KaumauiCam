@@ -106,6 +106,8 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 - Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps). Video is **stream-copied** (no re-encoding on the Pi), and a silent AAC audio track is mixed in from `lavfi anullsrc` because YouTube Live only registers a broadcast as live when an audio track is present. The only video input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; we deliberately do **not** use `+nobuffer`, `-use_wallclock_as_timestamps`, or `-shortest` (each was measured to drop ~70–90% of video frames before they reached the muxer).
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
+- **Link uptime:** a background thread pings **8.8.8.8** every 10 s and writes each result (success + RTT) to `link_pings` in `/app/data/state.db`. The Streaming page renders a 24-hour status-bar-style graph (5-min buckets) and a 24h uptime % so transient Starlink outages are visible even though the page itself can't load while the modem is offline. Retention is 30 days.
+- **YouTube broadcast health monitor:** with a public channel URL configured (any of `/@handle`, `/@handle/streams`, `/@handle/live`, `/channel/UC…`, or a bare `@handle`) the extension polls the channel's `/live` page every 60 s while a session is supposed to be running and parses YouTube's own `isLiveNow` flag plus the canonical video URL out of the served HTML. Two things this gives you that the encoder-side view can't: (1) confirmation the broadcast is actually live to viewers, with concurrent viewer count and a click-through link to the watch page, and (2) automatic detection of YouTube's "Preparing stream" lockup — where ffmpeg cheerfully reports `running:true` and a healthy byte counter while YouTube never promotes the broadcast. When YouTube has been confirmed not-live for **`youtube_health_unhealthy_grace_secs`** (default 90 s) and the current ffmpeg session has been alive at least **`youtube_health_min_session_age_secs`** (default 60 s, to avoid restart loops during normal cold start), the supervisor force-restarts ffmpeg with `end_reason="yt_unhealthy"` so the broadcast history distinguishes that recovery path from byte-stalls (`stalled`) and clean stops (`stopped`). The monitor only works for **public** broadcasts — unlisted/private streams don't appear on the channel `/live` page; for those, a future Data API integration would be required.
 
 ### Recordings
 
@@ -147,6 +149,11 @@ git push -u origin main
 | POST | `/api/recordings/delete` | `{name}` |
 | GET | `/api/bandwidth/status` | Month/day totals |
 | POST | `/api/bandwidth/reset` | Manual month reset |
+| GET | `/api/link/status` | Starlink ICMP probe state (last reply, 24h uptime %) |
+| GET | `/api/link/buckets` | Aggregated uptime buckets for graph (`?window=86400&bucket=300`) |
+| GET | `/api/stream/youtube_health` | Latest YouTube channel `/live` poll (state, video URL, viewers, unhealthy timer) |
+| POST | `/api/stream/youtube_health/poke` | Wake the monitor for an immediate poll (used after settings save) |
+| GET | `/api/stream/youtube_health/history` | Recent YouTube health rows (`?since=<unix-ts>&limit=200`) |
 | GET | `/api/storage` | USB mount + SD free GB |
 | POST | `/api/camera/ensure-livepreview` | Create profile on camera |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
