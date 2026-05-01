@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
+import logging.handlers
 import os
 import threading
 import time
@@ -18,9 +20,10 @@ import link_uptime
 import youtube_monitor
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
-from recorder import Recorder
-from scheduler import schedule_now, should_be_on
+from recorder import MIN_SEGMENT_BYTES, Recorder
+from scheduler import schedule_now, should_be_on, slot_active
 from usb_storage import (
+    USB_MOUNT_POINT,
     get_free_mb,
     get_recording_dir_usb,
     get_status as usb_status,
@@ -33,6 +36,12 @@ from youtube import YouTubeStreamer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("kaumaui")
+
+# Number of seconds of look-ahead used by the recorder's schedule-aware
+# guard. Must be larger than the SCHEDULER_TICK_SECS / segment-rotation
+# slack so we don't start a fresh 5-min segment that the next scheduler
+# tick will immediately tear down.
+RECORDER_TAIL_GUARD_SECS = 30
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
@@ -63,7 +72,31 @@ youtube_streamer = YouTubeStreamer(
     on_bytes_delta=lambda b, sid: bandwidth.record_delta(b, sid),
     on_session_event=_on_yt_session_event,
 )
-recorder = Recorder()
+
+
+def _recorder_should_continue() -> bool:
+    """True iff we expect to still be recording RECORDER_TAIL_GUARD_SECS
+    from now. The recorder calls this between segments; if it returns
+    False the supervisor exits cleanly instead of spawning a fresh 5-min
+    ffmpeg that will be SIGINT'd seconds later when the slot boundary
+    arrives. Manual force-record always wins."""
+    try:
+        with _state_lock:
+            if _recording_force:
+                return True
+        cfg = cfgmod.load()
+        rs = cfg.get("recordings_schedule") or {}
+        if not rs.get("enabled", False):
+            return False
+        soon = schedule_now() + dt.timedelta(seconds=RECORDER_TAIL_GUARD_SECS)
+        return slot_active(soon, rs)
+    except Exception:
+        logger.exception("recorder_should_continue")
+        # Fail safe: keep recording rather than silently stopping.
+        return True
+
+
+recorder = Recorder(should_continue=_recorder_should_continue)
 go2rtc_sup = Go2RtcSupervisor()
 
 _state_lock = threading.Lock()
@@ -130,6 +163,71 @@ def _can_start_recording(cfg: Dict[str, Any], dest_dir: str, label: str) -> Tupl
         if free_mb is not None and free_mb < 100:
             return False, f"USB low space: {free_mb} MB"
     return True, "ok"
+
+
+# --- Persistent app log to USB --------------------------------------------
+# The device loses power at end-of-day with no clean shutdown, so Docker's
+# JSON-file logs (which only cover the current container run) are wiped on
+# every reboot. Mirroring the application logger to the USB drive gives us
+# a persistent record across power cycles -- the same drive that holds the
+# recordings -- which is essential for diagnosing things like short or
+# 0-byte segments after the fact.
+USB_LOG_DIR = os.path.join(USB_MOUNT_POINT, "KaumauiCam", "logs")
+USB_LOG_FILE = os.path.join(USB_LOG_DIR, "kaumaui.log")
+USB_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
+USB_LOG_BACKUP_COUNT = 5  # ~50 MB total
+_usb_log_handler: logging.Handler | None = None
+_usb_log_lock = threading.Lock()
+
+
+def _attach_usb_log_handler() -> bool:
+    """Idempotently attach a rotating file handler at USB_LOG_FILE.
+
+    Returns True iff the handler is now attached (either already was, or
+    we just attached it). Safe to call repeatedly; takes USB_LOG_LOCK so
+    concurrent callers don't race on the os.makedirs / handler add.
+    """
+    global _usb_log_handler
+    with _usb_log_lock:
+        if _usb_log_handler is not None:
+            return True
+        if not is_mounted():
+            return False
+        try:
+            os.makedirs(USB_LOG_DIR, exist_ok=True)
+            handler = logging.handlers.RotatingFileHandler(
+                USB_LOG_FILE,
+                maxBytes=USB_LOG_MAX_BYTES,
+                backupCount=USB_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            handler.setLevel(logging.INFO)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+                )
+            )
+            logging.getLogger().addHandler(handler)
+            _usb_log_handler = handler
+        except Exception:
+            logger.exception("attach USB log handler failed")
+            return False
+    # Logged outside the lock so the entry itself goes through the handler.
+    logger.info("USB log handler attached -> %s", USB_LOG_FILE)
+    return True
+
+
+def _usb_log_setup_loop() -> None:
+    """Retry attaching the USB log handler until it succeeds.
+
+    The USB probe runs every 30s; the drive is usually mounted within a
+    few seconds of boot but may be plugged in later. Once attached the
+    loop exits -- rotation handles long-term file growth.
+    """
+    while True:
+        if _attach_usb_log_handler():
+            return
+        time.sleep(15)
 
 
 def _apply_boot() -> None:
@@ -278,6 +376,16 @@ def _scheduler_loop() -> None:
             want_rec = rforce or sched_rec
             if want_rec:
                 if not recorder.is_running():
+                    # Mirror the recorder's own schedule-aware guard: if
+                    # the slot is going to end within
+                    # RECORDER_TAIL_GUARD_SECS, don't bother spinning up
+                    # ffmpeg only for the supervisor to immediately bail.
+                    # Without this check the loop would churn through
+                    # rapid start->bail cycles for the last ~30 s of
+                    # every slot.
+                    if not _recorder_should_continue():
+                        time.sleep(SCHEDULER_TICK_SECS)
+                        continue
                     try:
                         dest, label = _recording_dir(cfg)
                     except Exception as e:
@@ -746,13 +854,15 @@ def rec_list():
         dest, _ = _recording_dir(cfg)
     except Exception:
         dest = os.path.join("/app/data", "recordings")
-    # Hide stub files left behind when gst-launch couldn't reach the camera.
-    # The recorder is supposed to delete these itself, but a defensive
-    # threshold here keeps the UI clean if any slip through (e.g. user
-    # killed the container mid-segment, leaving a zero-byte file).
+    # Hide stub files left behind when ffmpeg couldn't reach the camera or
+    # got SIGINT'd within seconds at a schedule slot boundary. The recorder
+    # auto-removes anything below MIN_SEGMENT_BYTES at finalize time, but a
+    # defensive filter here keeps the UI clean if any slip through (e.g.
+    # the container is killed mid-segment, an unlink fails on the FAT USB,
+    # or older stubs predate the higher cleanup threshold).
     # The currently-recording segment is exempt -- it's still being written
     # and may legitimately be tiny in its first second or two.
-    min_bytes = 100 * 1024
+    min_bytes = MIN_SEGMENT_BYTES
     current = recorder.status().get("current_file") or ""
     current_name = os.path.basename(current) if current else ""
     items = []
@@ -791,12 +901,13 @@ def rec_delete():
 
 @app.route("/api/recordings/cleanup-empty", methods=["POST"])
 def rec_cleanup_empty():
-    """Delete all stub mp4/ts files smaller than 100 KB. These accumulate
-    when the camera RTSP is rejecting the configured profile (each retry
-    creates a fresh empty file via gst's filesink before the negotiation
-    fails). Safe to call any time; the currently-recording segment is
-    skipped by name."""
-    min_bytes = 100 * 1024
+    """Delete all stub mp4/ts files smaller than MIN_SEGMENT_BYTES. These
+    accumulate when the camera RTSP is rejecting the configured profile
+    (each retry creates a fresh empty file via ffmpeg's mp4 muxer before
+    negotiation fails) or when ffmpeg gets SIGINT'd within seconds at a
+    schedule slot boundary. Safe to call any time; the currently-recording
+    segment is skipped by name."""
+    min_bytes = MIN_SEGMENT_BYTES
     cfg = cfgmod.load()
     try:
         dest, _ = _recording_dir(cfg)
@@ -889,6 +1000,13 @@ def main() -> None:
         start_probe()
     except Exception:
         logger.exception("USB probe start failed")
+    # Mirror the app logger to the USB drive once it's mounted. Power
+    # loss without unmount is expected on this device, so Docker's
+    # container log file gets wiped on every reboot; the USB log is the
+    # only place to see what happened across power cycles.
+    threading.Thread(
+        target=_usb_log_setup_loop, daemon=True, name="usb-log-setup"
+    ).start()
     # Start the uptime probe immediately so we begin recording link history
     # before anything else (camera/go2rtc/scheduler can take seconds and we
     # want the very first outage caught even during boot).

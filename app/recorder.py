@@ -35,14 +35,28 @@ logger = logging.getLogger(__name__)
 SEGMENT_SECONDS = 300
 
 # Discard segment files that contain less than this many bytes when ffmpeg
-# exits. A clean 5-min H.265 1080p15 segment is hundreds of KB at minimum, so
-# anything below this threshold is just an empty mp4 stub created before
-# RTSP/encoder negotiation succeeded.
-MIN_SEGMENT_BYTES = 100 * 1024
+# exits. A clean 5-min H.265 1080p15 segment from this Axis stream measures
+# >= ~2 MB on the quietest scenes we've recorded; the largest "stub" we've
+# observed is the ~9-second tail segment that gets SIGINT'd at a schedule
+# slot boundary, which sits at ~300 KB. 1 MB cleanly separates the two and
+# is comfortably above any boundary stub we expect to see in practice.
+MIN_SEGMENT_BYTES = 1 * 1024 * 1024
+
+# When the supervisor would otherwise start a fresh 5-min ffmpeg pipeline
+# but the schedule is going to ask us to stop within this many seconds,
+# bail instead. Without this guard, the recorder cheerfully starts a fresh
+# segment ~5-9 s before the slot boundary, ffmpeg gets SIGINT'd ~10 s
+# later, and we'd be left with a useless 7-10 s mp4 stub on the recordings
+# directory.
+SEGMENT_TAIL_GUARD_SECS = 30
 
 
 class Recorder:
-    def __init__(self, on_event: Optional[Callable[[str, str], None]] = None):
+    def __init__(
+        self,
+        on_event: Optional[Callable[[str, str], None]] = None,
+        should_continue: Optional[Callable[[], bool]] = None,
+    ):
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.RLock()
         self._dest_dir: Optional[str] = None
@@ -53,6 +67,7 @@ class Recorder:
         self._stop = threading.Event()
         self._stderr_reader: Optional[threading.Thread] = None
         self._on_event = on_event
+        self._should_continue = should_continue
         self._stderr_lines: List[str] = []
 
     def is_running(self) -> bool:
@@ -187,21 +202,38 @@ class Recorder:
         err_th.join(timeout=2)
 
         # If the segment is too small to be usable (RTSP failed before any
-        # real video reached mp4mux), delete the stub file so it doesn't
+        # real video reached mp4mux, or the schedule killed the pipeline
+        # within seconds of opening it), delete the stub file so it doesn't
         # show up in the recordings list and signal failure to the supervisor.
         try:
             sz = os.path.getsize(out)
-        except OSError:
+            exists = True
+        except OSError as e:
             sz = 0
+            exists = os.path.exists(out)
+            logger.warning("getsize failed for %s: %s (exists=%s)", out, e, exists)
         if sz < MIN_SEGMENT_BYTES:
             logger.warning(
-                "Discarding short segment %s (%d bytes < %d threshold)",
-                out, sz, MIN_SEGMENT_BYTES,
+                "Discarding short segment %s (%d bytes < %d threshold, exists=%s)",
+                out, sz, MIN_SEGMENT_BYTES, exists,
             )
-            try:
-                os.remove(out)
-            except OSError as e:
-                logger.warning("failed to remove short segment %s: %s", out, e)
+            if exists:
+                try:
+                    os.remove(out)
+                except OSError as e:
+                    logger.error(
+                        "Failed to remove short segment %s: %s", out, e
+                    )
+                else:
+                    if os.path.exists(out):
+                        # FAT/USB quirk: unlink reported success but the
+                        # entry is still visible. Loudly so we notice.
+                        logger.error(
+                            "Short segment %s still present after os.remove",
+                            out,
+                        )
+                    else:
+                        logger.info("Removed short segment %s", out)
             return False
 
         if self._on_event:
@@ -211,6 +243,23 @@ class Recorder:
     def _supervise(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
+            # Schedule-aware gate: if the caller's schedule indicates we
+            # are about to be told to stop (e.g. the slot boundary is
+            # within SEGMENT_TAIL_GUARD_SECS), don't kick off another
+            # 5-min ffmpeg only to have it killed within seconds. The
+            # main scheduler tick will follow up shortly with .stop().
+            if self._should_continue is not None:
+                try:
+                    cont = bool(self._should_continue())
+                except Exception:
+                    logger.exception("recorder should_continue() raised")
+                    cont = True
+                if not cont:
+                    logger.info(
+                        "Recorder: schedule indicates imminent stop;"
+                        " not starting another segment"
+                    )
+                    break
             try:
                 ok = self._run_one_segment()
             except Exception as e:
