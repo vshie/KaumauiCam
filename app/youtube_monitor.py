@@ -49,17 +49,19 @@ logger = logging.getLogger("kaumaui.yt-monitor")
 
 DB_PATH = os.environ.get("KAUMAUI_STATE_DB", "/app/data/state.db")
 
-# Polling cadence while a stream is supposed to be running. 60s gives a
-# fresh sample roughly every two encoder restart cycles (the streamer's
-# stall watchdog is 30s) without flooding the channel page with requests
-# or burning visible Starlink quota -- one /live fetch is ~250 KB after
-# gzip on the wire (~1.1 MB decoded), so 60 polls/h ≈ 15 MB/h on the
-# wire. We'd love to stop reading early once isLiveNow is seen, but the
-# flag lives in the player-response JSON ~60% of the way through the
-# body so streaming early-termination doesn't actually save much
-# uncompressed work and adds a fragility surface (the offset varies
-# per video). Read the full body and just parse it.
-POLL_INTERVAL_SECS = 60.0
+# Polling cadence while a stream is supposed to be running. 30s gives
+# us 2 polls per minute, which matters most during the 6-minute kickoff
+# window (see _scheduler_loop in main.py) where the operator wants to
+# know quickly if YouTube actively terminated a freshly-going-live
+# broadcast. One /live fetch is ~250 KB after gzip (~1.1 MB decoded),
+# so 120 polls/h ≈ 30 MB/h on the wire -- still negligible vs the
+# 4.5 Mbps RTMP push itself. We'd love to stop reading early once
+# isLiveNow is seen, but the flag lives in the player-response JSON
+# ~60% of the way through the body so streaming early-termination
+# doesn't actually save much uncompressed work and adds a fragility
+# surface (the offset varies per video). Read the full body and just
+# parse it.
+POLL_INTERVAL_SECS = 30.0
 # A YouTube broadcast typically takes 20-60s after RTMP starts before
 # the channel /live page reflects it. Anything below this threshold for
 # session age is treated as "still spinning up, no opinion" rather than

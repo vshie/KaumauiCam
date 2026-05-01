@@ -103,6 +103,21 @@ _state_lock = threading.Lock()
 _youtube_force = False
 _recording_force = False
 _youtube_session_start = 0.0
+# Broadcast-attempt-level kickoff timestamp. Distinct from
+# `_youtube_session_start` (which resets on every ffmpeg respawn) --
+# `_youtube_kickoff_start` is the wall-clock of the *first* ffmpeg start
+# in the current supervisor-driven broadcast attempt. It survives ffmpeg
+# crash/restart cycles within the same attempt, and is reset to 0 when
+# the supervisor stops streaming or force-bounces (so the next start
+# gets a fresh 6-min kickoff window). Used by the YT-health watchdog to
+# distinguish "first 6 min of trying to go live" from steady-state.
+_youtube_kickoff_start = 0.0
+# Sticky flag: have we observed a Starlink ping outage during the
+# current post-kickoff broadcast? If so, we're more aggressive about
+# bouncing once pings are steady again -- the user's spec is "give YT
+# 60s of steady pings to recover; if it hasn't, bounce". Reset on
+# bounce / stop / a confirmed YT-LIVE poll.
+_link_drop_during_session = False
 _recording_error: str | None = None
 _boot_applied = False
 
@@ -256,7 +271,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.6"
+_EXTENSION_VERSION = "0.3.7"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -283,6 +298,7 @@ def _listen_ports_to_try() -> list[int]:
 
 def _scheduler_loop() -> None:
     global _youtube_force, _recording_force, _youtube_session_start, _recording_error
+    global _youtube_kickoff_start, _link_drop_during_session
     while True:
         try:
             cfg = cfgmod.load()
@@ -308,8 +324,24 @@ def _scheduler_loop() -> None:
                     cam = _camera()
                     rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
                     if youtube_streamer.start(rtsp, key):
+                        now_ts = time.time()
                         with _state_lock:
-                            _youtube_session_start = time.time()
+                            _youtube_session_start = now_ts
+                            # Only seed the broadcast-attempt kickoff
+                            # timestamp on the FIRST ffmpeg start of an
+                            # attempt. ffmpeg respawns within the same
+                            # attempt (e.g. "broken pipe" → restart) keep
+                            # the original kickoff window so we don't
+                            # silently re-grant the operator a fresh 6
+                            # minutes every time RTMP burps.
+                            if _youtube_kickoff_start <= 0:
+                                _youtube_kickoff_start = now_ts
+                                logger.info(
+                                    "YouTube broadcast kickoff window starts (%.0fs grace)",
+                                    float(cfg.get(
+                                        "youtube_health_kickoff_grace_secs", 360.0
+                                    )),
+                                )
                 else:
                     # Stall watchdog: ffmpeg's process can stay alive while
                     # its internal thread queues wedge after a transient
@@ -327,46 +359,167 @@ def _scheduler_loop() -> None:
                             stalled,
                         )
                         youtube_streamer.stop(reason="stalled")
-                    else:
-                        # YouTube-side health watchdog: catches the case
-                        # where ffmpeg is happily pushing bytes (stall
-                        # watchdog above is satisfied) but YouTube has
-                        # not promoted the broadcast to live -- the
-                        # "Preparing stream" lockup we hit on
-                        # 2026-04-30. youtube_monitor polls the channel
-                        # /live page and exposes how long it has
-                        # confirmed the broadcast is not live; only
-                        # restart once that confirmation has stood for
-                        # the configured grace window.
-                        if cfg.get("youtube_health_autorestart", True):
-                            grace = float(
-                                cfg.get("youtube_health_unhealthy_grace_secs", 90.0)
-                            )
-                            min_age = float(
-                                cfg.get("youtube_health_min_session_age_secs", 60.0)
-                            )
+                    elif cfg.get("youtube_health_autorestart", True):
+                        # YouTube-side health watchdog. Two modes, keyed
+                        # off the broadcast-attempt-level
+                        # `_youtube_kickoff_start`:
+                        #
+                        #   1. Kickoff (first 6 min after the broadcast
+                        #      attempt begins): be patient with YouTube
+                        #      (it routinely takes 30-90s to register a
+                        #      fresh ingest, and we've seen 2-3 min on
+                        #      Starlink), but bounce immediately if the
+                        #      8.8.8.8 ping monitor reports the link is
+                        #      down -- ffmpeg started during a marginal
+                        #      link rarely recovers cleanly, so a fresh
+                        #      attempt with a fresh kickoff window is
+                        #      more reliable than letting the existing
+                        #      one limp along.
+                        #
+                        #   2. Post-kickoff: tolerate brief Starlink
+                        #      hiccups (ffmpeg can ride them out, and
+                        #      YouTube usually reclaims the broadcast on
+                        #      its own once bytes flow again). Track
+                        #      whether we've seen any link outage during
+                        #      this attempt; once pings have been steady
+                        #      for `youtube_health_post_link_recovery_secs`
+                        #      after such an outage, if YouTube is still
+                        #      not live, give up and bounce with a fresh
+                        #      6-min kickoff. With no link issues at all,
+                        #      fall back to the classic
+                        #      `youtube_health_unhealthy_grace_secs`
+                        #      (90s) trigger.
+                        kickoff_grace = float(
+                            cfg.get("youtube_health_kickoff_grace_secs", 360.0)
+                        )
+                        post_link_recovery = float(
+                            cfg.get("youtube_health_post_link_recovery_secs", 60.0)
+                        )
+                        grace = float(
+                            cfg.get("youtube_health_unhealthy_grace_secs", 90.0)
+                        )
+                        min_age = float(
+                            cfg.get("youtube_health_min_session_age_secs", 60.0)
+                        )
+
+                        with _state_lock:
+                            yt_t0 = _youtube_session_start
+                            kickoff_t0 = _youtube_kickoff_start
+                            link_drop_seen = _link_drop_during_session
+                        now_ts = time.time()
+                        session_age = (now_ts - yt_t0) if yt_t0 else 0.0
+                        kickoff_age = (now_ts - kickoff_t0) if kickoff_t0 else 0.0
+                        in_kickoff = kickoff_t0 > 0 and kickoff_age < kickoff_grace
+                        unhealthy = youtube_monitor.unhealthy_for_secs()
+
+                        link = link_uptime.quick_status()
+                        link_up = bool(link.get("up"))
+                        last_fail = link.get("last_failure_ts")
+                        secs_since_fail = (
+                            (now_ts - float(last_fail))
+                            if last_fail is not None
+                            else float("inf")
+                        )
+                        link_recently_unhealthy = (
+                            (not link_up)
+                            or secs_since_fail < post_link_recovery
+                        )
+
+                        # Note any link outage that occurs during this
+                        # attempt. Cleared on bounce / stop / confirmed
+                        # YT-LIVE (below).
+                        if link_recently_unhealthy and not link_drop_seen:
                             with _state_lock:
-                                yt_t0 = _youtube_session_start
-                            session_age = (
-                                (time.time() - yt_t0) if yt_t0 else 0.0
+                                _link_drop_during_session = True
+                            link_drop_seen = True
+                            logger.info(
+                                "Link outage observed during YT broadcast"
+                                " (kickoff_age=%.0fs); suppressing YT-health"
+                                " watchdog until pings are steady for %.0fs",
+                                kickoff_age,
+                                post_link_recovery,
                             )
-                            unhealthy = youtube_monitor.unhealthy_for_secs()
+
+                        # Reset the link-drop sticky flag if YouTube
+                        # has confirmed the broadcast is back live --
+                        # the system recovered on its own and we no
+                        # longer need to be aggressive about bouncing.
+                        yt_state = (
+                            youtube_monitor.latest().get("state") or ""
+                        )
+                        if yt_state == "live" and link_drop_seen:
+                            with _state_lock:
+                                _link_drop_during_session = False
+                            link_drop_seen = False
+                            logger.info(
+                                "YouTube confirmed live; clearing"
+                                " link-drop watchdog flag"
+                            )
+
+                        bounce_reason: str | None = None
+                        if in_kickoff:
+                            if not link_up:
+                                bounce_reason = "link_down_kickoff"
+                                logger.warning(
+                                    "Link down during kickoff"
+                                    " (kickoff_age=%.0fs, consecutive_failures=%d);"
+                                    " force-restart so next attempt starts clean",
+                                    kickoff_age,
+                                    int(link.get("consecutive_failures") or 0),
+                                )
+                        elif link_recently_unhealthy:
+                            # Suppress watchdog while link is currently
+                            # down or only recently recovered; ffmpeg
+                            # can ride it out.
+                            pass
+                        elif link_drop_seen:
+                            # Pings have been steady for at least
+                            # post_link_recovery seconds after a link
+                            # drop earlier in this attempt. If YouTube
+                            # is still not live, bounce.
                             if (
                                 session_age >= min_age
-                                and unhealthy >= grace
+                                and unhealthy > 0
                             ):
+                                bounce_reason = "yt_unhealthy_post_link"
                                 logger.warning(
-                                    "YouTube confirmed not live for %.0fs"
-                                    " while ffmpeg streaming (session_age=%.0fs);"
-                                    " force-restart",
+                                    "Pings steady %.0fs after link recovery"
+                                    " but YouTube still not live for %.0fs"
+                                    " (session_age=%.0fs); force-restart"
+                                    " with fresh kickoff",
+                                    secs_since_fail,
                                     unhealthy,
                                     session_age,
                                 )
-                                youtube_streamer.stop(reason="yt_unhealthy")
-                                youtube_monitor.reset_unhealthy_clock()
+                        elif (
+                            session_age >= min_age
+                            and unhealthy >= grace
+                        ):
+                            bounce_reason = "yt_unhealthy"
+                            logger.warning(
+                                "YouTube confirmed not live for %.0fs"
+                                " while ffmpeg streaming (session_age=%.0fs);"
+                                " force-restart with fresh kickoff",
+                                unhealthy,
+                                session_age,
+                            )
+
+                        if bounce_reason is not None:
+                            youtube_streamer.stop(reason=bounce_reason)
+                            youtube_monitor.reset_unhealthy_clock()
+                            with _state_lock:
+                                _youtube_kickoff_start = 0.0
+                                _link_drop_during_session = False
             else:
                 if youtube_streamer.is_running():
                     youtube_streamer.stop()
+                # Clear broadcast-attempt-level state so the next time
+                # the supervisor decides to stream (next scheduled slot
+                # or operator hits Start), we begin a fresh kickoff.
+                with _state_lock:
+                    if _youtube_kickoff_start != 0.0 or _link_drop_during_session:
+                        _youtube_kickoff_start = 0.0
+                        _link_drop_during_session = False
 
             # Recordings desired
             rs = cfg["recordings_schedule"]
@@ -562,7 +715,8 @@ def ptz_autofocus():
 
 @app.route("/api/stream/start", methods=["POST"])
 def stream_start():
-    global _youtube_force, _youtube_session_start
+    global _youtube_force, _youtube_session_start, _youtube_kickoff_start
+    global _link_drop_during_session
     cfg = cfgmod.load()
     key = (cfg.get("youtube_stream_key") or "").strip()
     if not key:
@@ -576,17 +730,26 @@ def stream_start():
         logger.warning("ensure youtubelive on stream/start: %s", e)
     rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
     if youtube_streamer.start(rtsp, key):
+        now_ts = time.time()
         with _state_lock:
-            _youtube_session_start = time.time()
+            _youtube_session_start = now_ts
+            # Manual Start always begins a fresh kickoff attempt --
+            # the operator hitting the button after a failed broadcast
+            # expects the new 6-min grace, not the residual state of
+            # whatever the supervisor was doing before.
+            _youtube_kickoff_start = now_ts
+            _link_drop_during_session = False
         return jsonify({"ok": True, "status": youtube_streamer.status()})
     return jsonify({"error": "failed to start"}), 500
 
 
 @app.route("/api/stream/stop", methods=["POST"])
 def stream_stop():
-    global _youtube_force
+    global _youtube_force, _youtube_kickoff_start, _link_drop_during_session
     with _state_lock:
         _youtube_force = False
+        _youtube_kickoff_start = 0.0
+        _link_drop_during_session = False
     youtube_streamer.stop()
     return jsonify({"ok": True})
 
@@ -596,19 +759,29 @@ def stream_status():
     cfg = cfgmod.load()
     with _state_lock:
         t0 = _youtube_session_start
+        kt0 = _youtube_kickoff_start
         yf = _youtube_force
+        link_drop_seen = _link_drop_during_session
     st = youtube_streamer.status()
     sess = 0
     if youtube_streamer.is_running() and t0:
         sess = bandwidth.session_sum_since(t0, st.get("session_id"))
     bw = bandwidth.status(cfg.get("bandwidth_overhead_pct", 3), cfg.get("monthly_quota_gb", 0))
     yt_health = youtube_monitor.latest()
+    kickoff_grace = float(cfg.get("youtube_health_kickoff_grace_secs", 360.0))
+    now_ts = time.time()
+    kickoff_age = (now_ts - kt0) if (kt0 and youtube_streamer.is_running()) else 0.0
+    in_kickoff = bool(kt0 and youtube_streamer.is_running() and kickoff_age < kickoff_grace)
     st.update(
         {
             "bandwidth": bw,
             "session_bytes": sess,
             "force": yf,
-            "session_age_secs": (time.time() - t0) if (t0 and youtube_streamer.is_running()) else 0.0,
+            "session_age_secs": (now_ts - t0) if (t0 and youtube_streamer.is_running()) else 0.0,
+            "kickoff_age_secs": kickoff_age,
+            "kickoff_grace_secs": kickoff_grace,
+            "in_kickoff_window": in_kickoff,
+            "link_drop_seen_this_session": bool(link_drop_seen),
             "youtube_health": yt_health,
             "youtube_health_autorestart": bool(cfg.get("youtube_health_autorestart", True)),
         }

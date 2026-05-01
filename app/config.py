@@ -38,10 +38,25 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # that force-restarts ffmpeg when YouTube has confirmed the stream
     # is not live for ``youtube_health_unhealthy_grace_secs`` while we
     # expect it to be -- i.e. the "Preparing stream" lockup recovery.
+    #
+    # The watchdog has two modes -- see _scheduler_loop in app/main.py:
+    #   * Kickoff (first ``youtube_health_kickoff_grace_secs`` of a
+    #     broadcast attempt): be patient with YouTube taking its time
+    #     to register the stream, but bounce immediately if the
+    #     internet ping monitor reports the link is down (a wedged
+    #     ffmpeg started during a marginal link rarely recovers cleanly,
+    #     a fresh start is more reliable).
+    #   * Post-kickoff: tolerate brief Starlink outages -- ffmpeg can
+    #     ride them out and YouTube usually reclaims the broadcast on
+    #     its own. Only after the link has been steady for
+    #     ``youtube_health_post_link_recovery_secs`` do we re-evaluate
+    #     YouTube health and bounce if the broadcast is still not live.
     "youtube_channel_url": "",
     "youtube_health_autorestart": True,
     "youtube_health_unhealthy_grace_secs": 90.0,
     "youtube_health_min_session_age_secs": 60.0,
+    "youtube_health_kickoff_grace_secs": 360.0,
+    "youtube_health_post_link_recovery_secs": 60.0,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

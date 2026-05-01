@@ -257,6 +257,32 @@ def status() -> Dict[str, Any]:
     }
 
 
+def quick_status() -> Dict[str, Any]:
+    """In-memory link state without the SQL aggregate windows.
+
+    `status()` runs two GROUP BY queries every call; that's fine for the
+    UI which polls every few seconds, but the YouTube supervisor watchdog
+    in main.py reads link state on every 2-second scheduler tick and
+    doesn't need the rolling summaries -- only the live in-memory fields.
+    """
+    with _state_lock:
+        last_check = _last_check_ts
+        last_success = _last_success_ts
+        last_failure = _last_failure_ts
+        fails = _consecutive_fails
+        unavailable = _ping_unavailable
+    up = (fails == 0) and (last_success is not None)
+    return {
+        "now": time.time(),
+        "last_check_ts": last_check,
+        "last_success_ts": last_success,
+        "last_failure_ts": last_failure,
+        "consecutive_failures": fails,
+        "up": up,
+        "ping_unavailable": unavailable,
+    }
+
+
 def buckets(since_ts: float, bucket_secs: int) -> List[Dict[str, Any]]:
     """Aggregated uptime buckets between ``since_ts`` and now.
 

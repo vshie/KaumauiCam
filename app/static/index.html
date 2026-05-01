@@ -836,6 +836,8 @@
                 if (reason === "stopped") return "Stopped (clean)";
                 if (reason === "stalled") return "Restarted (stalled)";
                 if (reason === "yt_unhealthy") return "Restarted (YouTube not live)";
+                if (reason === "yt_unhealthy_post_link") return "Restarted (YouTube didn't recover after link blip)";
+                if (reason === "link_down_kickoff") return "Restarted (link drop during startup)";
                 if (reason === "orphaned") return "Ended (orphaned)";
                 if (reason === "dns") return "Network: DNS failed";
                 if (reason === "rtmp_broken_pipe") return "Network: YouTube dropped us";
@@ -853,7 +855,12 @@
                 }
                 var r = s.end_reason;
                 if (r === "died" || r === "rtsp_error") return "sess-died";
-                if (r === "stalled" || r === "yt_unhealthy") return "sess-stalled";
+                if (
+                  r === "stalled"
+                  || r === "yt_unhealthy"
+                  || r === "yt_unhealthy_post_link"
+                  || r === "link_down_kickoff"
+                ) return "sess-stalled";
                 if (r === "dns" || r === "rtmp_broken_pipe" || r === "network") {
                   return "sess-network";
                 }
