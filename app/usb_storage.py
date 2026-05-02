@@ -103,6 +103,28 @@ def get_free_mb(path: str | None = None) -> float | None:
         return None
 
 
+def _disk_usage(path: str) -> dict | None:
+    """Return (total/free/used) bytes for the filesystem hosting ``path``.
+
+    Mirrors ``shutil.disk_usage`` but without forcing the import; returns
+    ``None`` if the path can't be statted (e.g. USB unmounted)."""
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    frsize = st.f_frsize
+    total = st.f_blocks * frsize
+    free = st.f_bavail * frsize
+    used = max(0, total - free)
+    used_pct = (100.0 * used / total) if total else None
+    return {
+        "total_bytes": total,
+        "free_bytes": free,
+        "used_bytes": used,
+        "used_pct": used_pct,
+    }
+
+
 def get_recording_dir_usb() -> str:
     base = os.path.join(USB_MOUNT_POINT, KAUMAUI_DIR, "recordings")
     os.makedirs(base, exist_ok=True)
@@ -112,11 +134,19 @@ def get_recording_dir_usb() -> str:
 def get_status() -> dict:
     mounted = is_mounted()
     free = get_free_mb(USB_MOUNT_POINT) if mounted else None
+    usage = _disk_usage(USB_MOUNT_POINT) if mounted else None
     return {
         "mounted": mounted,
         "device": _device,
         "free_mb": free,
         "mount_point": USB_MOUNT_POINT,
+        # Full byte-level usage, present only when a USB volume is mounted;
+        # the UI uses these to draw a "used / total" bar above the
+        # recordings list. Older callers can keep using free_mb.
+        "total_bytes": usage["total_bytes"] if usage else None,
+        "free_bytes": usage["free_bytes"] if usage else None,
+        "used_bytes": usage["used_bytes"] if usage else None,
+        "used_pct": usage["used_pct"] if usage else None,
     }
 
 

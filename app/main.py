@@ -874,28 +874,61 @@ def link_status():
 def link_buckets():
     """Aggregated uptime buckets for the uptime graph.
 
-    ``window`` (seconds, default 24h, max 30d) is the time range ending
-    at "now". ``bucket`` (seconds, default 5min) is the bucket width;
-    each bucket reports total checks, successes, and average RTT, with
+    Two ways to call this:
+
+    * ``?from=<unix-ts>&to=<unix-ts>`` — explicit time range, used by
+      the streaming page to render a fixed daytime window (e.g. today's
+      7AM–6PM HST) regardless of when the page is viewed.
+    * ``?window=<secs>`` — legacy "last N seconds ending at now"
+      window. Default 24h, capped at 30d.
+
+    ``bucket`` (seconds, default 5 min) is the bucket width; each
+    bucket reports total checks, successes, and average RTT, with
     empty buckets explicitly returned as ``checks=0`` so the UI can
     render gaps for periods when no probes ran."""
-    try:
-        window_secs = int(request.args.get("window", 24 * 3600))
-    except (TypeError, ValueError):
-        window_secs = 24 * 3600
     try:
         bucket_secs = int(request.args.get("bucket", 300))
     except (TypeError, ValueError):
         bucket_secs = 300
-    window_secs = max(60, min(window_secs, 30 * 24 * 3600))
     bucket_secs = max(30, min(bucket_secs, 24 * 3600))
-    since = time.time() - window_secs
+
+    now = time.time()
+    from_arg = request.args.get("from")
+    to_arg = request.args.get("to")
+    since: float
+    until: float
+    if from_arg is not None:
+        try:
+            since = float(from_arg)
+        except (TypeError, ValueError):
+            since = now - 24 * 3600
+        try:
+            until = float(to_arg) if to_arg is not None else now
+        except (TypeError, ValueError):
+            until = now
+        # Cap the requested range so a malformed query can't make us
+        # synthesize a giant bucket array (one element per bucket_secs).
+        max_span = 30 * 24 * 3600
+        if until - since > max_span:
+            since = until - max_span
+        window_secs = max(0, int(round(until - since)))
+    else:
+        try:
+            window_secs = int(request.args.get("window", 24 * 3600))
+        except (TypeError, ValueError):
+            window_secs = 24 * 3600
+        window_secs = max(60, min(window_secs, 30 * 24 * 3600))
+        since = now - window_secs
+        until = now
+
     return jsonify(
         {
             "window_secs": window_secs,
             "bucket_secs": bucket_secs,
-            "now": time.time(),
-            "buckets": link_uptime.buckets(since, bucket_secs),
+            "from": since,
+            "to": until,
+            "now": now,
+            "buckets": link_uptime.buckets(since, bucket_secs, until),
         }
     )
 

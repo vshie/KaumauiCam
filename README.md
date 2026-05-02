@@ -153,11 +153,11 @@ git push -u origin main
 | GET | `/api/bandwidth/status` | Month/day totals |
 | POST | `/api/bandwidth/reset` | Manual month reset |
 | GET | `/api/link/status` | Starlink ICMP probe state (last reply, 24h uptime %) |
-| GET | `/api/link/buckets` | Aggregated uptime buckets for graph (`?window=86400&bucket=300`) |
+| GET | `/api/link/buckets` | Aggregated uptime buckets for graph (`?window=86400&bucket=300`, or fixed range via `?from=<unix-ts>&to=<unix-ts>` — used by the streaming page's 7am–6pm HST view) |
 | GET | `/api/stream/youtube_health` | Latest YouTube channel `/live` poll (state, video URL, viewers, unhealthy timer) |
 | POST | `/api/stream/youtube_health/poke` | Wake the monitor for an immediate poll (used after settings save) |
 | GET | `/api/stream/youtube_health/history` | Recent YouTube health rows (`?since=<unix-ts>&limit=200`) |
-| GET | `/api/storage` | USB mount + SD free GB |
+| GET | `/api/storage` | USB mount, used / total / free bytes when mounted, plus SD free GB |
 | POST | `/api/camera/ensure-livepreview` | Create profile on camera |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |

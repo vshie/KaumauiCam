@@ -92,7 +92,7 @@
                 Auto-restart ffmpeg if YouTube confirms the stream is not live for {{ Math.round(ytGraceSecs) }}s
               </label>
               <schedule-editor v-model="draftYt" />
-              <div class="row">
+              <div class="row row-actions-spaced">
                 <button type="button" class="btn" @click="saveYoutube">Save</button>
                 <button type="button" class="btn" @click="startYoutubeNow">Start now</button>
                 <button type="button" class="btn btn-danger" @click="stopYoutube">Stop</button>
@@ -114,7 +114,7 @@
               <h2 class="h2-spaced">
                 Link uptime
                 <span class="badge" :class="linkBadgeClass">{{ linkBadgeText }}</span>
-                <span class="badge badge-muted">ping {{ linkTarget }} · last 24h</span>
+                <span class="badge badge-muted">ping {{ linkTarget }} · 7am–6pm HST</span>
               </h2>
               <p class="status-line">{{ linkText }}</p>
               <div class="uptime-graph-wrap" v-if="linkBuckets.length">
@@ -123,7 +123,7 @@
                   :viewBox="'0 0 ' + linkBuckets.length + ' 100'"
                   preserveAspectRatio="none"
                   role="img"
-                  aria-label="Starlink uptime, last 24 hours"
+                  aria-label="Starlink uptime, 7am to 6pm Pacific/Honolulu"
                 >
                   <rect
                     v-for="(b, i) in linkBuckets"
@@ -138,7 +138,7 @@
                   </rect>
                 </svg>
                 <div class="uptime-axis" aria-hidden="true">
-                  <span>−24h</span><span>−18h</span><span>−12h</span><span>−6h</span><span>now</span>
+                  <span>7am</span><span>10am</span><span>1pm</span><span>4pm</span><span>6pm</span>
                 </div>
               </div>
               <p class="status-line hint" v-else>Collecting uptime samples…</p>
@@ -185,7 +185,14 @@
                 <button type="button" class="btn btn-danger" @click="stopRecord">Stop recording</button>
               </div>
               <p class="status-line">{{ recStatusLine }}</p>
-              <h2 class="h2-spaced">Files</h2>
+              <h2 class="h2-spaced">
+                Files
+                <span class="badge" :class="storageBadgeClass">{{ storageBadgeText }}</span>
+              </h2>
+              <p class="status-line">{{ storageLine }}</p>
+              <div class="bar" v-if="storageHasBar">
+                <div :style="{ width: storageUsedPct + '%' }"></div>
+              </div>
               <p class="status-line hint">Recordings are saved as 5-minute MP4 segments while the session is active.</p>
               <div class="row">
                 <button
@@ -415,6 +422,21 @@
             });
           }
 
+          // Today's 7am–6pm window in Pacific/Honolulu, returned as
+          // unix seconds. Hawaii doesn't observe DST, so HST is a
+          // constant UTC-10 offset and we don't have to chase tzdata.
+          function hstDayWindow() {
+            var hstOffsetMs = -10 * 3600 * 1000;
+            var nowMs = Date.now();
+            var hstShifted = nowMs + hstOffsetMs;
+            var hstMidnightShifted = Math.floor(hstShifted / 86400000) * 86400000;
+            var hstMidnightUtcMs = hstMidnightShifted - hstOffsetMs;
+            return {
+              fromSec: (hstMidnightUtcMs + 7 * 3600 * 1000) / 1000,
+              toSec: (hstMidnightUtcMs + 18 * 3600 * 1000) / 1000,
+            };
+          }
+
           function formatHonoluluNow(ts) {
             try {
               return new Intl.DateTimeFormat(undefined, {
@@ -623,10 +645,52 @@
                 linkBuckets: [],
                 recStatusLine: "—",
                 recFiles: [],
+                storageInfo: null,
                 pc: null,
                 ptzBackoffMs: 800,
                 ptzTimer: null,
               };
+            },
+            computed: {
+              storageBadgeText: function () {
+                var s = this.storageInfo;
+                if (!s) return "—";
+                return s.mounted ? "USB mounted" : "USB not mounted";
+              },
+              storageBadgeClass: function () {
+                var s = this.storageInfo;
+                if (!s) return "badge-muted";
+                return s.mounted ? "badge-good" : "badge-muted";
+              },
+              storageHasBar: function () {
+                var s = this.storageInfo;
+                return !!(s && s.mounted && s.total_bytes);
+              },
+              storageUsedPct: function () {
+                var s = this.storageInfo;
+                if (!s || !s.total_bytes) return 0;
+                var p = (s.used_pct != null) ? s.used_pct : (100 * (s.used_bytes || 0) / s.total_bytes);
+                if (!isFinite(p) || p < 0) return 0;
+                if (p > 100) return 100;
+                return p;
+              },
+              storageLine: function () {
+                var s = this.storageInfo;
+                if (!s) return "Checking USB storage…";
+                if (!s.mounted) {
+                  var sd = (s.sd_free_gb != null) ? (" · SD free " + s.sd_free_gb.toFixed(1) + " GB") : "";
+                  return "USB not mounted — plug in a USB stick to enable USB recording" + sd + ".";
+                }
+                if (!s.total_bytes) {
+                  var freeMb = (s.free_mb != null) ? (s.free_mb.toFixed(1) + " MB free") : "size unknown";
+                  return "USB mounted at " + (s.mount_point || "/mnt/usb") + " · " + freeMb + ".";
+                }
+                var pct = this.storageUsedPct;
+                return "USB " + this.fmtBytes(s.used_bytes || 0) +
+                  " used of " + this.fmtBytes(s.total_bytes) +
+                  " (" + pct.toFixed(1) + "%) · " +
+                  this.fmtBytes(s.free_bytes || 0) + " free.";
+              },
             },
             methods: {
               kmUrl: kmUrl,
@@ -938,7 +1002,13 @@
                     self.linkTarget = s.target || "8.8.8.8";
                   })
                   .catch(function () {});
-                this.api("GET", "/api/link/buckets?window=86400&bucket=300")
+                var win = hstDayWindow();
+                // 11h window, 5-min buckets => 132 bars; matches the
+                // resolution the previous 24h/5min view had per bar.
+                var url = "/api/link/buckets?bucket=300" +
+                  "&from=" + Math.floor(win.fromSec) +
+                  "&to=" + Math.floor(win.toSec);
+                this.api("GET", url)
                   .then(function (r) {
                     self.linkBuckets = (r && r.buckets) || [];
                   })
@@ -966,6 +1036,7 @@
                 var self = this;
                 this.api("GET", "/api/storage")
                   .then(function (u) {
+                    self.storageInfo = u || null;
                     if (!u.mounted && self.recStorage === "usb") {
                       self.bannerText = "USB not mounted — recordings set to USB only will fail.";
                       self.bannerClass = "warn";

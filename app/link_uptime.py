@@ -283,8 +283,19 @@ def quick_status() -> Dict[str, Any]:
     }
 
 
-def buckets(since_ts: float, bucket_secs: int) -> List[Dict[str, Any]]:
-    """Aggregated uptime buckets between ``since_ts`` and now.
+def buckets(
+    since_ts: float,
+    bucket_secs: int,
+    until_ts: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Aggregated uptime buckets between ``since_ts`` and ``until_ts``.
+
+    ``until_ts`` defaults to the current wall-clock time when omitted, so
+    the original "since now" call sites keep working unchanged. Pass an
+    explicit ``until_ts`` (e.g. for the streaming page's fixed daytime
+    window) to render bucket spans that don't end at "now" -- the slots
+    after ``now`` are still included, with ``checks=0`` for "no data
+    yet", so the graph keeps a stable horizontal extent through the day.
 
     Returns one entry per bucket, oldest first. Empty buckets (no checks
     recorded -- e.g. before pings ever started, or while the container
@@ -292,13 +303,13 @@ def buckets(since_ts: float, bucket_secs: int) -> List[Dict[str, Any]]:
     gaps explicitly rather than misrepresenting them as uptime.
     """
     bucket_secs = max(30, int(bucket_secs))
-    now = time.time()
-    if since_ts >= now:
+    end_ts = float(until_ts) if until_ts is not None else time.time()
+    if since_ts >= end_ts:
         return []
     c = _conn()
     try:
         anchor = int(since_ts // bucket_secs) * bucket_secs
-        last_anchor = int(now // bucket_secs) * bucket_secs
+        last_anchor = int(end_ts // bucket_secs) * bucket_secs
         rows = c.execute(
             "SELECT CAST((ts - ?) / ? AS INTEGER) AS b, "
             "       COUNT(*) AS n, "

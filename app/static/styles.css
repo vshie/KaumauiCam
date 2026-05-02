@@ -293,6 +293,15 @@ textarea {
   margin-top: 0.65rem;
 }
 
+/* A "row" of action buttons that wants a tiny bit of breathing room
+   before the next section header (used on the Streaming page between
+   Save / Start now / Stop and the YouTube health line). The base .row
+   has no bottom margin and the next .h2-spaced sets margin-top:1.35rem,
+   which sits a touch too tight against the buttons. */
+.row-actions-spaced {
+  margin-bottom: 0.45rem;
+}
+
 button.btn {
   background: linear-gradient(135deg, var(--blue-dim) 0%, var(--teal) 100%);
   color: #042f2e;
