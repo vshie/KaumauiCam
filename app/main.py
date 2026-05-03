@@ -17,6 +17,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, send_f
 import bandwidth
 import config as cfgmod
 import link_uptime
+import solar
 import youtube_monitor
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
@@ -271,7 +272,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.7"
+_EXTENSION_VERSION = "0.3.8"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -947,6 +948,72 @@ def storage():
     return jsonify(u)
 
 
+@app.route("/api/solar/status", methods=["GET"])
+def solar_status():
+    """Solar logger snapshot: enabled flag, host, interval, last sample,
+    file size / row count, last error. Polled by the Settings page so
+    the operator sees logging is alive without downloading the CSV."""
+    try:
+        st = solar.status()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        st["preview"] = solar.csv_preview(max_rows=5)
+    except Exception:
+        st["preview"] = ""
+    return jsonify(st)
+
+
+@app.route("/api/solar/sample", methods=["GET"])
+def solar_sample():
+    """One-shot live poll of the ESPHome device, independent of the
+    background loop. Optional ``?host=`` overrides the configured host
+    so the operator can test a different IP from the Settings page
+    before saving."""
+    host = request.args.get("host") or None
+    try:
+        return jsonify(solar.fetch_live(host))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/solar/download", methods=["GET"])
+def solar_download():
+    """Send the cumulative CSV. 404 if the file doesn't exist yet
+    (logger disabled, or just deleted, or the device hasn't been
+    reachable for the very first poll)."""
+    path = solar.csv_path()
+    if not os.path.isfile(path):
+        return jsonify({"error": "no csv yet"}), 404
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name="solar.csv",
+        mimetype="text/csv",
+    )
+
+
+@app.route("/api/solar/delete", methods=["POST"])
+def solar_delete():
+    """Wipe the CSV. Resets in-memory row count + last sample so the
+    Settings panel reflects the wipe immediately. Logging continues; a
+    fresh row appears at the next poll cycle (within
+    ``solar_interval_secs``)."""
+    res = solar.delete_csv()
+    if not res.get("ok"):
+        return jsonify(res), 500
+    return jsonify(res)
+
+
+@app.route("/api/solar/poke", methods=["POST"])
+def solar_poke():
+    """Wake the logger thread immediately. The Settings page calls this
+    after Save so the next CSV row reflects the new host/interval
+    within ~1s rather than up to ``solar_interval_secs``."""
+    solar.poke()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
 def ensure_livepreview():
     try:
@@ -1232,6 +1299,14 @@ def main() -> None:
         )
     except Exception:
         logger.exception("youtube_monitor.start failed")
+    # Victron solar logger. Reads the few keys it needs (host, interval,
+    # enabled flag) on every cycle via this lambda, so config edits on
+    # the Settings page take effect at the next poll without restarting
+    # the thread.
+    try:
+        solar.start(get_cfg=cfgmod.load)
+    except Exception:
+        logger.exception("solar.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

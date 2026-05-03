@@ -57,6 +57,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "youtube_health_min_session_age_secs": 60.0,
     "youtube_health_kickoff_grace_secs": 360.0,
     "youtube_health_post_link_recovery_secs": 60.0,
+    # Victron solar logger (see app/solar.py). Polls the on-board
+    # ESPHome device (Fishpond) at ``solar_host`` every
+    # ``solar_interval_secs`` and appends one row to /app/data/solar.csv.
+    # ``timestamp_iso`` is always the first column; the file is
+    # cumulative (append-only, no rotation) and downloadable / deletable
+    # from the Settings page.
+    "solar_enabled": True,
+    "solar_host": "192.168.20.66",
+    "solar_interval_secs": 60.0,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

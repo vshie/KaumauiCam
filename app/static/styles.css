@@ -798,6 +798,75 @@ tr.sess-stopped td { color: var(--muted); }
   letter-spacing: 0.04em;
 }
 
+/* Inline error tone for status lines (used by the solar logger panel
+   when /api/solar/status reports last_error). Distinct from the banner
+   palette which fills the page-top alert; this is a one-line note
+   inside a panel. */
+.status-line.err {
+  color: var(--danger);
+}
+
+/* Anchor buttons can't take the disabled attribute, so we fake it with
+   pointer-events + opacity for the "Download CSV" link when the file
+   doesn't exist yet. Mirrors the visual weight of a real
+   <button:disabled>. */
+.btn.is-disabled {
+  pointer-events: none;
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Solar logger -- compact tile grid for the latest Victron readings.
+   Auto-fits between ~140px (mobile) and 200px (desktop) so the panel
+   stays useful at both widths without a custom breakpoint. */
+.solar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.55rem;
+  margin: 0.4rem 0 0.2rem;
+}
+
+.solar-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.solar-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.solar-value {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* CSV preview pane -- capped height with horizontal scroll for very
+   long header rows. Monospace so columns line up visually on the
+   Settings page. */
+.solar-preview {
+  margin: 0.35rem 0 0.2rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre;
+}
+
 @media (max-width: 560px) {
   .sched-ruler-label {
     font-size: 0.6rem;
