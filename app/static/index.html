@@ -38,6 +38,31 @@
         <main>
           <div v-if="bannerText" :class="['banner', bannerClass]">{{ bannerText }}</div>
 
+          <div v-if="ytDeviceModalOpen" class="km-modal-overlay" @click.self="closeYoutubeDeviceModal">
+            <div class="km-modal" role="dialog" aria-labelledby="km-modal-title">
+              <h2 id="km-modal-title">Connect YouTube</h2>
+              <p class="status-line">
+                On the device you're using, open Google's device authorization page and enter the code below.
+              </p>
+              <p class="km-modal-code" aria-label="Device code">
+                <span class="km-code">{{ ytDeviceUserCode || '…' }}</span>
+                <button type="button" class="btn btn-secondary" @click="copyDeviceCode" :disabled="!ytDeviceUserCode">Copy code</button>
+              </p>
+              <div class="row row-actions-spaced">
+                <button type="button" class="btn" @click="openDeviceUrl" :disabled="!ytDeviceUrl">Open google.com/device ↗</button>
+                <button type="button" class="btn btn-danger" @click="closeYoutubeDeviceModal">Cancel</button>
+              </div>
+              <p class="status-line hint">{{ ytDeviceStatusLine }}</p>
+              <p class="status-line hint" v-if="ytDeviceUrl">If the button is blocked, open <code>{{ ytDeviceUrl }}</code> manually.</p>
+              <p class="status-line hint">
+                Not seeing the "Kaumaui Cam" app name after entering the code?
+                You may see an <em>"Unverified app"</em> warning — that's expected for your own project;
+                click <em>Advanced ▸ Go to (app name) (unsafe)</em> to continue. See the
+                <a href="https://github.com/vshie/KaumauiCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">setup guide</a> for the full walk-through.
+              </p>
+            </div>
+          </div>
+
           <section v-show="tab === 'live'" class="tab-panel">
             <div class="grid grid-2">
               <div class="panel panel-accent">
@@ -82,6 +107,52 @@
             <div class="panel">
               <h2>YouTube Live</h2>
               <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
+
+              <h2 class="h2-spaced">
+                YouTube account (API mode)
+                <span class="badge" :class="ytApiBadgeClass">{{ ytApiBadgeText }}</span>
+              </h2>
+              <p class="status-line hint">
+                Hands-off daily streaming. When connected, the extension creates a fresh YouTube broadcast each day, promotes it to <em>live</em> once bytes are flowing, and closes it out at the end of the day — no YouTube Studio work required.
+                <a href="https://github.com/vshie/KaumauiCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">Setup guide ↗</a>
+              </p>
+              <div v-if="!ytApiConnected">
+                <label>OAuth client ID</label>
+                <input type="text" v-model="ytOauthClientId" placeholder="xxxxxxxxx.apps.googleusercontent.com" autocomplete="off" />
+                <label>OAuth client secret</label>
+                <input type="password" v-model="ytOauthClientSecret" placeholder="GOCSPX-…" autocomplete="off" />
+                <div class="row row-actions-spaced">
+                  <button type="button" class="btn btn-secondary" @click="saveYoutubeApiCreds">Save credentials</button>
+                  <button type="button" class="btn" @click="startYoutubeOauth" :disabled="!ytApiCredsReady">Connect YouTube</button>
+                </div>
+                <p class="status-line" v-if="ytOauthStatus.last_auth_error">Last error: {{ ytOauthStatus.last_auth_error }}</p>
+              </div>
+              <div v-else>
+                <p class="status-line"><strong>Connected as {{ ytOauthStatus.channel_title || 'YouTube account' }}.</strong></p>
+                <label class="ck-row">
+                  <input type="checkbox" v-model="ytApiMode" @change="saveYoutubeApiConfig" />
+                  Use API mode (extension manages broadcasts automatically)
+                </label>
+                <label>Broadcast title template <span class="hint">(<code>{date}</code> is replaced with the HST date)</span></label>
+                <input type="text" v-model="ytBroadcastTitleTemplate" placeholder="Kaumaui Cam - {date}" />
+                <label>Broadcast privacy</label>
+                <select v-model="ytBroadcastPrivacy">
+                  <option value="public">Public (required for the /live health monitor)</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="private">Private</option>
+                </select>
+                <div class="row row-actions-spaced">
+                  <button type="button" class="btn btn-secondary" @click="saveYoutubeApiConfig">Save API settings</button>
+                  <button type="button" class="btn btn-danger" @click="disconnectYoutube">Disconnect</button>
+                </div>
+                <p class="status-line" v-if="ytBroadcastLine">{{ ytBroadcastLine }}</p>
+                <p class="status-line" v-if="ytBroadcastWatchUrl">
+                  <a :href="ytBroadcastWatchUrl" target="_blank" rel="noopener noreferrer">Open today's broadcast on YouTube ↗</a>
+                </p>
+              </div>
+
+              <h2 class="h2-spaced">Stream key (legacy fallback)</h2>
+              <p class="status-line hint">Used when API mode is off or not connected. In that case the operator must arm a broadcast in YouTube Studio manually.</p>
               <label>Stream key (paste from YouTube Studio → Stream)</label>
               <textarea v-model="ytKey" placeholder="xxxx-xxxx-xxxx-xxxx"></textarea>
               <label>Public channel URL (for live-health monitor)</label>
@@ -657,6 +728,24 @@
                 ytChannelUrl: "",
                 ytAutorestart: true,
                 ytGraceSecs: 90,
+                ytOauthClientId: "",
+                ytOauthClientSecret: "",
+                ytApiMode: false,
+                ytBroadcastTitleTemplate: "Kaumaui Cam - {date}",
+                ytBroadcastPrivacy: "public",
+                ytOauthStatus: {
+                  connected: false,
+                  needs_reauth: false,
+                  channel_title: null,
+                  last_auth_error: null,
+                  pending: null,
+                },
+                ytBroadcast: null,
+                ytDeviceModalOpen: false,
+                ytDeviceUserCode: "",
+                ytDeviceUrl: "",
+                ytDeviceStatusLine: "Waiting for you to approve the code…",
+                ytOauthPollTimer: null,
                 quotaGb: 100,
                 overheadPct: 3,
                 recStorage: "auto",
@@ -822,6 +911,43 @@
                   { label: "Device", value: txt(src.device_type) },
                 ];
               },
+              ytApiCredsReady: function () {
+                return !!(String(this.ytOauthClientId || "").trim()
+                  && String(this.ytOauthClientSecret || "").trim());
+              },
+              ytApiConnected: function () {
+                return !!(this.ytOauthStatus && this.ytOauthStatus.connected);
+              },
+              ytApiBadgeText: function () {
+                if (this.ytOauthStatus.needs_reauth) return "Reauth needed";
+                if (this.ytApiConnected) return this.ytApiMode ? "Connected · active" : "Connected · off";
+                if (this.ytApiCredsReady) return "Ready to connect";
+                return "Not configured";
+              },
+              ytApiBadgeClass: function () {
+                if (this.ytOauthStatus.needs_reauth) return "badge-bad";
+                if (this.ytApiConnected) return this.ytApiMode ? "badge-good" : "badge-muted";
+                if (this.ytApiCredsReady) return "badge-warn";
+                return "badge-muted";
+              },
+              ytBroadcastLine: function () {
+                var b = this.ytBroadcast;
+                if (!b) {
+                  if (!this.ytApiMode) return "";
+                  return "No broadcast today yet — one will be created on the first scheduled slot.";
+                }
+                var parts = [];
+                parts.push(b.is_live ? "LIVE" : "Not yet live");
+                if (b.title) parts.push("\"" + b.title + "\"");
+                if (b.lifecycle) parts.push("state: " + b.lifecycle);
+                if (b.stream_status) parts.push("stream: " + b.stream_status);
+                if (b.stream_health) parts.push("health: " + b.stream_health);
+                if (b.last_error) parts.push("last error: " + b.last_error);
+                return parts.join(" · ") + ".";
+              },
+              ytBroadcastWatchUrl: function () {
+                return (this.ytBroadcast && this.ytBroadcast.watch_url) || "";
+              },
             },
             methods: {
               kmUrl: kmUrl,
@@ -864,6 +990,12 @@
                     self.ytGraceSecs = c.youtube_health_unhealthy_grace_secs != null
                       ? c.youtube_health_unhealthy_grace_secs
                       : 90;
+                    self.ytOauthClientId = c.youtube_oauth_client_id || "";
+                    self.ytOauthClientSecret = c.youtube_oauth_client_secret || "";
+                    self.ytApiMode = !!c.youtube_api_mode;
+                    self.ytBroadcastTitleTemplate = c.youtube_broadcast_title_template
+                      || "Kaumaui Cam - {date}";
+                    self.ytBroadcastPrivacy = c.youtube_broadcast_privacy || "public";
                     self.quotaGb = c.monthly_quota_gb != null ? c.monthly_quota_gb : 100;
                     self.overheadPct = c.bandwidth_overhead_pct != null ? c.bandwidth_overhead_pct : 3;
                     self.recStorage = c.recordings_storage || "auto";
@@ -1255,6 +1387,118 @@
                   self.pollStream();
                 });
               },
+              saveYoutubeApiCreds: function () {
+                var self = this;
+                this.api("POST", "/api/config", {
+                  youtube_oauth_client_id: String(this.ytOauthClientId || "").trim(),
+                  youtube_oauth_client_secret: String(this.ytOauthClientSecret || "").trim(),
+                }).then(function () {
+                  alert("Saved. Click Connect YouTube to authorize.");
+                  self.loadConfig({ force: true });
+                });
+              },
+              saveYoutubeApiConfig: function () {
+                var self = this;
+                this.api("POST", "/api/config", {
+                  youtube_api_mode: !!this.ytApiMode,
+                  youtube_broadcast_title_template: String(this.ytBroadcastTitleTemplate || "Kaumaui Cam - {date}"),
+                  youtube_broadcast_privacy: String(this.ytBroadcastPrivacy || "public"),
+                }).then(function () {
+                  self.loadConfig({ force: true });
+                  self.pollYoutubeApi();
+                });
+              },
+              startYoutubeOauth: function () {
+                var self = this;
+                // Persist credentials first so the background poller sees
+                // the same values we just typed in.
+                this.api("POST", "/api/config", {
+                  youtube_oauth_client_id: String(this.ytOauthClientId || "").trim(),
+                  youtube_oauth_client_secret: String(this.ytOauthClientSecret || "").trim(),
+                })
+                  .then(function () {
+                    return self.api("POST", "/api/youtube/oauth/start", {});
+                  })
+                  .then(function (r) {
+                    self.ytDeviceUserCode = r.user_code || "";
+                    self.ytDeviceUrl = r.verification_url || "https://www.google.com/device";
+                    self.ytDeviceStatusLine = "Waiting for you to approve the code…";
+                    self.ytDeviceModalOpen = true;
+                    self.startYoutubeOauthPoll();
+                  })
+                  .catch(function (e) {
+                    alert("OAuth start failed: " + (e && e.message ? e.message : e));
+                  });
+              },
+              startYoutubeOauthPoll: function () {
+                var self = this;
+                if (this.ytOauthPollTimer) clearInterval(this.ytOauthPollTimer);
+                var tick = function () {
+                  self.pollYoutubeApi().then(function () {
+                    if (self.ytOauthStatus.connected) {
+                      self.closeYoutubeDeviceModal();
+                      alert("YouTube connected as " + (self.ytOauthStatus.channel_title || "your account") + ".\n\nToggle 'Use API mode' on to enable hands-off daily streaming.");
+                    } else if (self.ytOauthStatus.pending && self.ytOauthStatus.pending.error) {
+                      self.ytDeviceStatusLine = "Error: " + self.ytOauthStatus.pending.error;
+                    } else if (!self.ytOauthStatus.pending) {
+                      // Server cleared the pending flow without connecting;
+                      // treat as cancelled/expired.
+                      self.ytDeviceStatusLine = "Authorization ended without connecting.";
+                    }
+                  });
+                };
+                this.ytOauthPollTimer = setInterval(tick, 3000);
+              },
+              stopYoutubeOauthPoll: function () {
+                if (this.ytOauthPollTimer) clearInterval(this.ytOauthPollTimer);
+                this.ytOauthPollTimer = null;
+              },
+              closeYoutubeDeviceModal: function () {
+                this.ytDeviceModalOpen = false;
+                this.stopYoutubeOauthPoll();
+              },
+              copyDeviceCode: function () {
+                var code = this.ytDeviceUserCode || "";
+                if (!code) return;
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(code).then(function () {
+                    // No alert -- avoid interrupting the flow.
+                  }).catch(function () {});
+                } else {
+                  // Fallback for insecure contexts.
+                  try {
+                    var ta = document.createElement("textarea");
+                    ta.value = code;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand("copy");
+                    document.body.removeChild(ta);
+                  } catch (e) {}
+                }
+              },
+              openDeviceUrl: function () {
+                if (this.ytDeviceUrl) window.open(this.ytDeviceUrl, "_blank", "noopener");
+              },
+              disconnectYoutube: function () {
+                var self = this;
+                if (!confirm("Disconnect YouTube? Today's broadcast state will be cleared and API mode disabled.")) return;
+                this.api("POST", "/api/youtube/oauth/disconnect", {}).then(function () {
+                  self.loadConfig({ force: true });
+                  self.pollYoutubeApi();
+                });
+              },
+              pollYoutubeApi: function () {
+                var self = this;
+                return this.api("GET", "/api/youtube/oauth/status")
+                  .then(function (s) {
+                    self.ytOauthStatus = s || self.ytOauthStatus;
+                    return self.api("GET", "/api/youtube/broadcast/status");
+                  })
+                  .then(function (b) {
+                    self.ytBroadcast = (b && b.broadcast) || null;
+                  })
+                  .catch(function () {});
+              },
               startYoutubeNow: function () {
                 var self = this;
                 this.api("POST", "/api/config", { youtube_stream_key: String(this.ytKey || "").trim() })
@@ -1462,6 +1706,7 @@
                 self.pollStorage();
                 self.pollLink();
                 self.pollSolar();
+                self.pollYoutubeApi();
               });
               setInterval(function () {
                 self.pollStream();
@@ -1478,6 +1723,13 @@
               setInterval(function () {
                 self.pollSolar();
               }, 15000);
+              setInterval(function () {
+                // Refresh OAuth + broadcast status independently of the
+                // device-flow poller so the UI stays fresh (connected
+                // badge, today's broadcast lifecycle) without user
+                // interaction.
+                self.pollYoutubeApi();
+              }, 10000);
             },
           }).mount("#app");
         }

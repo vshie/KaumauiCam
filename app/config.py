@@ -57,6 +57,28 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "youtube_health_min_session_age_secs": 60.0,
     "youtube_health_kickoff_grace_secs": 360.0,
     "youtube_health_post_link_recovery_secs": 60.0,
+    # YouTube Data API v3 broadcast lifecycle manager (see
+    # app/youtube_api.py and docs/youtube-api-setup.md).
+    #
+    # With OAuth connected + ``youtube_api_mode`` true, the extension
+    # inserts one broadcast per HST calendar day, binds it to a
+    # persistent liveStream, and transitions it to live/complete on the
+    # right schedule -- so streams start reliably every day with no
+    # manual YouTube Studio work. When disabled or not connected, the
+    # extension falls back to the legacy pasted ``youtube_stream_key``
+    # path (which requires the operator to arm a broadcast in Studio
+    # manually).
+    #
+    # Client ID / secret come from a Google Cloud OAuth client of type
+    # "TVs and Limited Input devices" -- see the setup guide for the
+    # (one-time) Cloud Console walkthrough. Refresh tokens are
+    # persisted separately in /app/data/youtube_oauth.json (not in
+    # config.json) so they can be file-mode 0600.
+    "youtube_oauth_client_id": "",
+    "youtube_oauth_client_secret": "",
+    "youtube_api_mode": False,
+    "youtube_broadcast_title_template": "Kaumaui Cam - {date}",
+    "youtube_broadcast_privacy": "public",
     # Victron solar logger (see app/solar.py). Polls the on-board
     # ESPHome device (Fishpond) at ``solar_host`` every
     # ``solar_interval_secs`` and appends one row to /app/data/solar.csv.

@@ -104,6 +104,9 @@ docker buildx build --platform linux/arm64,linux/arm/v7 \
 
 ### YouTube
 
+- Two modes:
+  - **API mode (recommended for daily unattended streaming):** the extension owns the full broadcast lifecycle via YouTube Data API v3 — one broadcast per HST calendar day, created and bound to a persistent liveStream on the first slot, transitioned to `live` once RTMP is active, and completed at end-of-day. OAuth uses the device flow ("go to google.com/device and enter a code"), so a headless Pi accessed from a different network is fully supported. One-time Cloud Console setup is required — see **[docs/youtube-api-setup.md](docs/youtube-api-setup.md)** for the walkthrough.
+  - **Legacy stream-key mode:** paste a YouTube stream key + arm a broadcast in Studio manually. Unchanged from earlier versions of the extension. Kept as a fallback when API mode is off or not yet configured.
 - Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps). Video is **stream-copied** (no re-encoding on the Pi), and a silent AAC audio track is mixed in from `lavfi anullsrc` because YouTube Live only registers a broadcast as live when an audio track is present. The only video input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; we deliberately do **not** use `+nobuffer`, `-use_wallclock_as_timestamps`, or `-shortest` (each was measured to drop ~70–90% of video frames before they reached the muxer).
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
 - **Link uptime:** a background thread pings **8.8.8.8** every 10 s and writes each result (success + RTT) to `link_pings` in `/app/data/state.db`. The Streaming page renders a 24-hour status-bar-style graph (5-min buckets) and a 24h uptime % so transient Starlink outages are visible even though the page itself can't load while the modem is offline. Retention is 30 days.
@@ -176,6 +179,10 @@ git push -u origin main
 | GET | `/api/stream/youtube_health` | Latest YouTube channel `/live` poll (state, video URL, viewers, unhealthy timer) |
 | POST | `/api/stream/youtube_health/poke` | Wake the monitor for an immediate poll (used after settings save) |
 | GET | `/api/stream/youtube_health/history` | Recent YouTube health rows (`?since=<unix-ts>&limit=200`) |
+| POST | `/api/youtube/oauth/start` | Begin OAuth 2.0 device flow (see [docs/youtube-api-setup.md](docs/youtube-api-setup.md)); returns `user_code`, `verification_url` |
+| GET | `/api/youtube/oauth/status` | OAuth state (`connected`, `channel_title`, pending device code, last error) |
+| POST | `/api/youtube/oauth/disconnect` | Clear tokens + today's broadcast state; disable API mode |
+| GET | `/api/youtube/broadcast/status` | Today's managed broadcast (id, watch URL, lifecycle, stream health) |
 | GET | `/api/storage` | USB mount, used / total / free bytes when mounted, plus SD free GB |
 | GET | `/api/solar/status` | Solar logger status: enabled, host, interval, last sample, file size, row count, last error, 5-row preview |
 | GET | `/api/solar/sample` | One-shot live poll of the ESPHome device (optional `?host=` override) |

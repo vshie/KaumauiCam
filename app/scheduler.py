@@ -122,6 +122,26 @@ def should_be_on(now: dt.datetime, sched: dict) -> bool:
     return slot_active(soon, sched)
 
 
+def has_remaining_slots_today(now: dt.datetime, sched: dict) -> bool:
+    """True iff the schedule has any active slot at or after ``now`` and
+    before local midnight (same weekday). The YouTube Data API broadcast
+    manager consults this to decide whether ``want_yt`` going false is
+    just a between-slots gap (keep the broadcast open for the next slot)
+    or the end of the day (transition it to ``complete`` so the archive
+    finalises). Ignores the ``enabled`` flag off intentionally -- an
+    all-disabled schedule has "no remaining slots today"."""
+    if not sched.get("enabled"):
+        return False
+    wd = _WEEKDAYS[now.weekday()]
+    if wd not in _normalize_days(sched.get("days")):
+        return False
+    if slot_active(now, sched):
+        return True
+    current_slot = (now.hour * 60 + now.minute) // 15
+    slots = _normalize_slots(sched.get("slots"))
+    return any(s > current_slot for s in slots)
+
+
 def migrate_legacy_schedule(sched: dict) -> dict:
     """
     Normalize days/slots; if legacy window/interval keys are present, derive slots

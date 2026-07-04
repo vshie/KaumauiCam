@@ -933,3 +933,55 @@ tr.sess-stopped td { color: var(--muted); }
   outline-offset: 4px;
   border-radius: 6px;
 }
+
+/* --- Device-code modal for the YouTube OAuth flow -------------------
+   Rendered as a full-viewport fixed overlay so the user_code is the
+   obvious center of attention while the background app is briefly
+   ignorable. Palette matches the panel/hint theme so it doesn't feel
+   grafted on. */
+.km-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 8, 16, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.km-modal {
+  background: rgba(6, 22, 34, 0.98);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  padding: 1.5rem 1.6rem 1.35rem;
+  max-width: 30rem;
+  width: 100%;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.55);
+}
+
+.km-modal h2 {
+  margin-top: 0;
+}
+
+.km-modal-code {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.km-modal-code .km-code {
+  flex: 1;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  padding: 0.55rem 0.75rem;
+  background: rgba(4, 16, 28, 0.85);
+  border: 1px solid var(--teal);
+  color: var(--teal);
+  border-radius: var(--radius-sm);
+  text-align: center;
+  user-select: all;
+}

@@ -18,11 +18,12 @@ import bandwidth
 import config as cfgmod
 import link_uptime
 import solar
+import youtube_api
 import youtube_monitor
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import MIN_SEGMENT_BYTES, Recorder
-from scheduler import schedule_now, should_be_on, slot_active
+from scheduler import has_remaining_slots_today, schedule_now, should_be_on, slot_active
 from usb_storage import (
     USB_MOUNT_POINT,
     get_free_mb,
@@ -319,7 +320,40 @@ def _scheduler_loop() -> None:
             with _state_lock:
                 force = _youtube_force
             want_yt = force or sched_yt
-            key = (cfg.get("youtube_stream_key") or "").strip()
+            # Two ways to obtain the RTMP stream key ffmpeg will push to:
+            #
+            # (1) API mode: the extension has an OAuth-connected YouTube
+            #     account and manages one broadcast per HST calendar day
+            #     via app/youtube_api.py. ``ensure_todays_broadcast``
+            #     idempotently creates + binds the broadcast on the
+            #     first tick of the day and returns the reusable
+            #     liveStream's key on every subsequent call. If it
+            #     raises (transient API blip, invalid_grant, etc.) we
+            #     don't start ffmpeg this tick -- next tick retries.
+            #
+            # (2) Legacy mode: the operator pasted a stream key into
+            #     Settings; YouTube must be armed manually in Studio.
+            #     This is the pre-existing behavior, unchanged.
+            api_mode = bool(cfg.get("youtube_api_mode")) and youtube_api.is_connected()
+            key = ""
+            if want_yt:
+                if api_mode:
+                    try:
+                        ensured = youtube_api.ensure_todays_broadcast(
+                            title_template=cfg.get(
+                                "youtube_broadcast_title_template",
+                                "Kaumaui Cam - {date}",
+                            ),
+                            privacy=cfg.get("youtube_broadcast_privacy", "public"),
+                        )
+                        key = (ensured or {}).get("stream_key") or ""
+                    except youtube_api.YouTubeApiError as e:
+                        logger.warning(
+                            "YouTube API mode: ensure_todays_broadcast failed: %s", e
+                        )
+                        key = ""
+                else:
+                    key = (cfg.get("youtube_stream_key") or "").strip()
             if want_yt and key:
                 if not youtube_streamer.is_running():
                     cam = _camera()
@@ -344,6 +378,20 @@ def _scheduler_loop() -> None:
                                     )),
                                 )
                 else:
+                    # API mode: drive the broadcast lifecycle forward
+                    # on every tick while ffmpeg is running. This is
+                    # the ``transition(broadcastStatus="live")`` call
+                    # the reference article calls out -- the piece
+                    # that was missing and left broadcasts stuck in
+                    # "testing" state. Idempotent: does nothing once
+                    # the broadcast is already ``live``. Cheap (~2 API
+                    # calls) but guarded with try/except so a
+                    # transient failure never breaks the tick.
+                    if api_mode:
+                        try:
+                            youtube_api.drive_live()
+                        except Exception:
+                            logger.exception("youtube_api.drive_live failed")
                     # Stall watchdog: ffmpeg's process can stay alive while
                     # its internal thread queues wedge after a transient
                     # RTMP/RTSP hiccup, leaving bytes flat-lined to YouTube
@@ -521,6 +569,22 @@ def _scheduler_loop() -> None:
                     if _youtube_kickoff_start != 0.0 or _link_drop_during_session:
                         _youtube_kickoff_start = 0.0
                         _link_drop_during_session = False
+                # API mode: when the schedule has no further slots
+                # today (day's over), transition the day's broadcast
+                # to ``complete`` so it archives cleanly and Studio
+                # reflects the correct end time. Between-slots gaps
+                # keep the broadcast open -- this is what enabled the
+                # operator's "auto-stop off" pattern to work across
+                # multiple ffmpeg sessions in a day.
+                # ``complete_today`` is idempotent (clears state on
+                # first success, no-ops thereafter) and swallows its
+                # own exceptions, so calling it every tick during the
+                # dead time between end-of-day and midnight is cheap.
+                if api_mode and not has_remaining_slots_today(now, ys):
+                    try:
+                        youtube_api.complete_today()
+                    except Exception:
+                        logger.exception("youtube_api.complete_today failed")
 
             # Recordings desired
             rs = cfg["recordings_schedule"]
@@ -719,9 +783,24 @@ def stream_start():
     global _youtube_force, _youtube_session_start, _youtube_kickoff_start
     global _link_drop_during_session
     cfg = cfgmod.load()
-    key = (cfg.get("youtube_stream_key") or "").strip()
-    if not key:
-        return jsonify({"error": "youtube_stream_key empty"}), 400
+    api_mode = bool(cfg.get("youtube_api_mode")) and youtube_api.is_connected()
+    if api_mode:
+        try:
+            ensured = youtube_api.ensure_todays_broadcast(
+                title_template=cfg.get(
+                    "youtube_broadcast_title_template", "Kaumaui Cam - {date}"
+                ),
+                privacy=cfg.get("youtube_broadcast_privacy", "public"),
+            )
+        except youtube_api.YouTubeApiError as e:
+            return jsonify({"error": f"YouTube API: {e}"}), 500
+        key = (ensured or {}).get("stream_key") or ""
+        if not key:
+            return jsonify({"error": "YouTube API returned no stream_key"}), 500
+    else:
+        key = (cfg.get("youtube_stream_key") or "").strip()
+        if not key:
+            return jsonify({"error": "youtube_stream_key empty"}), 400
     with _state_lock:
         _youtube_force = True
     cam = _camera()
@@ -831,6 +910,59 @@ def stream_yt_health_history():
             "now": time.time(),
         }
     )
+
+
+# --- YouTube Data API v3 broadcast lifecycle -----------------------------
+# The endpoints below drive the OAuth device flow and expose today's
+# broadcast state. When ``youtube_api_mode`` is enabled and the operator
+# has connected an account, the scheduler in ``_scheduler_loop`` uses
+# these to obtain a per-day managed stream key and to promote the
+# broadcast to ``live`` -- see app/youtube_api.py for the state machine
+# and docs/youtube-api-setup.md for the one-time Cloud Console setup.
+
+
+@app.route("/api/youtube/oauth/start", methods=["POST"])
+def youtube_oauth_start():
+    """Begin the OAuth 2.0 device flow. Returns the user_code and
+    verification URL for the UI to display; a background thread
+    continues polling Google until the operator approves the code.
+    Poll ``/api/youtube/oauth/status`` to observe completion."""
+    try:
+        return jsonify(youtube_api.start_device_auth())
+    except youtube_api.YouTubeApiError as e:
+        return jsonify({"error": str(e), "needs_reauth": e.needs_reauth}), 400
+    except Exception as e:
+        logger.exception("youtube_api.start_device_auth failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/youtube/oauth/status", methods=["GET"])
+def youtube_oauth_status():
+    """OAuth + pending-flow state. Includes ``connected``, connected
+    channel title, any error from the last authorization attempt, and
+    the pending device code (if a flow is in progress)."""
+    return jsonify(youtube_api.status())
+
+
+@app.route("/api/youtube/oauth/disconnect", methods=["POST"])
+def youtube_oauth_disconnect():
+    """Clear all persisted OAuth tokens and today's broadcast state.
+    Also disables API mode so the scheduler falls back to the legacy
+    pasted-stream-key flow on the next tick."""
+    youtube_api.disconnect()
+    try:
+        cfgmod.update({"youtube_api_mode": False})
+    except Exception:
+        logger.exception("disable youtube_api_mode after disconnect failed")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/youtube/broadcast/status", methods=["GET"])
+def youtube_broadcast_status():
+    """Today's managed broadcast state (id, watch URL, lifecycle, stream
+    health, is_live flag) plus the current HST date for date-rollover
+    detection in the UI."""
+    return jsonify(youtube_api.broadcast_status())
 
 
 @app.route("/api/stream/sessions", methods=["GET"])
@@ -1265,6 +1397,19 @@ def main() -> None:
         youtube_monitor.init_db()
     except Exception:
         logger.exception("youtube_monitor.init_db failed")
+    try:
+        # Load persisted refresh token + today's broadcast state (if
+        # any) and wire the config-provided OAuth client credentials.
+        # The lambda is re-evaluated per call so config edits (paste a
+        # new client secret) take effect without a restart.
+        youtube_api.init(
+            get_client_creds=lambda: (
+                cfgmod.load().get("youtube_oauth_client_id", "") or "",
+                cfgmod.load().get("youtube_oauth_client_secret", "") or "",
+            ),
+        )
+    except Exception:
+        logger.exception("youtube_api.init failed")
     try:
         cfgmod.load()
     except Exception:
