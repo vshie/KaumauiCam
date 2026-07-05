@@ -1,6 +1,6 @@
 # Kaumaui Cam — BlueOS extension
 
-BlueOS extension for an Axis PTZ camera (fixed IP **192.168.20.20** by default): WebRTC live preview (`livepreview` 720p H.264 via **go2rtc**), VAPIX PTZ, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and scheduled **MP4** recordings (default `DefaultFishPond` H.265 profile) to USB or SD.
+BlueOS extension for an Axis PTZ camera (fixed IP **192.168.20.20** by default): WebRTC live preview (`livepreview` 720p H.264 via **go2rtc**), VAPIX PTZ, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycle (default `DefaultFishPond` H.265 profile, fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
 
 ## Reference
 
@@ -117,7 +117,8 @@ The "kickoff" timer is per *broadcast attempt*, not per ffmpeg session — ffmpe
 
 ### Recordings
 
-- Capture: **RTSP → MPEG-TS** while recording, then **remux to MP4** on stop.
+- Capture: **RTSP → MPEG-TS** while recording, then **remux to MP4** on stop. Long recordings are split into **5-minute MP4 segments** so a wedged ffmpeg never loses more than one segment.
+- **Cycle model (Recordings tab):** the operator enables a daily cycle by entering just two numbers — **record duration** and **pause duration**, both in decimal minutes. The extension records for *R* minutes, pauses for *P* minutes, and repeats inside a fixed **07:45 AM – 6:00 PM HST** window every day (no weekday filter). The UI shows a live preview of how many clips per day the cycle produces and their total video duration.  Defaults are **1 min record / 2 min pause** (~205 clips per day, ~3h 25m of video). *Record now* / *Stop recording* buttons and manual PTZ / storage / files controls are unaffected by the cycle.
 - **USB:** first removable **`sd*`** partition mounted at `/mnt/usb/KaumauiCam/recordings`.
 - **SD fallback:** `/app/data/recordings` — new clips **blocked** if free space is under **10 GB** on that filesystem.
 
@@ -166,7 +167,7 @@ git push -u origin main
 | POST | `/api/stream/start` | Start YouTube now |
 | POST | `/api/stream/stop` | Stop YouTube |
 | GET | `/api/stream/status` | Stream + bandwidth |
-| GET/POST | `/api/recordings/config` | Recording schedule / storage / profile |
+| GET/POST | `/api/recordings/config` | Recording cycle (record/pause secs + enabled) / storage / profile; GET returns a `preview` block with clips-per-day + total video duration |
 | POST | `/api/recordings/start` | Force record |
 | POST | `/api/recordings/stop` | Stop record |
 | GET | `/api/recordings/list` | MP4 list |

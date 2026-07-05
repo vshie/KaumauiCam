@@ -8,7 +8,7 @@ import threading
 from copy import deepcopy
 from typing import Any, Dict, List
 
-from scheduler import migrate_legacy_schedule
+from scheduler import migrate_legacy_schedule, normalize_recordings_cycle
 
 _ALL_DAYS: List[str] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -24,7 +24,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "camera_pass": "campass",
     "youtube_stream_key": "",
     "youtube_schedule": deepcopy(DEFAULT_SCHEDULE),
-    "recordings_schedule": deepcopy(DEFAULT_SCHEDULE),
+    # Recording cycle inside the fixed 7:45 AM - 6:00 PM HST daytime
+    # window. Each day the recorder records for ``record_secs``, pauses
+    # for ``pause_secs``, and repeats until the window closes. See
+    # scheduler.RECORDING_WINDOW_{START,STOP}_MIN and recording_active().
+    # Defaults produce ~205 clips totalling ~3h 25m per day; ``enabled``
+    # is false so the recorder stays off until the operator opts in.
+    "recordings_cycle": {
+        "enabled": False,
+        "record_secs": 60,
+        "pause_secs": 120,
+    },
     "recordings_storage": "auto",  # auto | usb | sd
     "recordings_profile": "DefaultFishPond",
     "monthly_quota_gb": 100.0,
@@ -118,12 +128,29 @@ def load() -> Dict[str, Any]:
             )
         else:
             merged["youtube_schedule"] = migrate_legacy_schedule(deepcopy(merged["youtube_schedule"]))
-        if "recordings_schedule" in data and isinstance(data["recordings_schedule"], dict):
-            merged["recordings_schedule"] = migrate_legacy_schedule(
-                {**deepcopy(DEFAULT_SCHEDULE), **data["recordings_schedule"]}
+        # Migration: earlier versions of the extension used a 15-min-slot
+        # ``recordings_schedule`` (same shape as youtube_schedule). The
+        # recordings tab has since been simplified to a fixed daytime
+        # window + record/pause cycle. If we find the legacy key on
+        # disk, seed the new ``recordings_cycle`` (preserving only the
+        # ``enabled`` flag; the slot pattern doesn't map cleanly to a
+        # single duration/pause) and drop the old key so subsequent
+        # saves stay clean.
+        legacy_rs = data.get("recordings_schedule")
+        if "recordings_cycle" not in data and isinstance(legacy_rs, dict):
+            merged["recordings_cycle"] = normalize_recordings_cycle({
+                **merged["recordings_cycle"],
+                "enabled": bool(legacy_rs.get("enabled", False)),
+            })
+        elif "recordings_cycle" in data:
+            merged["recordings_cycle"] = normalize_recordings_cycle(
+                {**merged["recordings_cycle"], **(data.get("recordings_cycle") or {})}
             )
         else:
-            merged["recordings_schedule"] = migrate_legacy_schedule(deepcopy(merged["recordings_schedule"]))
+            merged["recordings_cycle"] = normalize_recordings_cycle(
+                merged["recordings_cycle"]
+            )
+        merged.pop("recordings_schedule", None)
         return merged
 
 
@@ -137,10 +164,21 @@ def save(cfg: Dict[str, Any]) -> None:
 def update(partial: Dict[str, Any]) -> Dict[str, Any]:
     cfg = load()
     for k, v in partial.items():
-        if k in ("youtube_schedule", "recordings_schedule") and isinstance(v, dict):
+        if k == "youtube_schedule" and isinstance(v, dict):
             merged = {**cfg.get(k, {}), **v}
             cfg[k] = migrate_legacy_schedule(merged)
+        elif k == "recordings_cycle" and isinstance(v, dict):
+            merged = {**cfg.get(k, {}), **v}
+            cfg[k] = normalize_recordings_cycle(merged)
+        elif k == "recordings_schedule":
+            # Old clients may still POST this key -- silently ignore
+            # rather than 400ing so a stale browser tab doesn't wedge
+            # settings saves.
+            continue
         else:
             cfg[k] = v
+    # Guarantee the legacy key never leaks back onto disk via a
+    # partial update (paranoia; ``load()`` already strips it).
+    cfg.pop("recordings_schedule", None)
     save(cfg)
     return cfg

@@ -1,15 +1,117 @@
-"""15-minute slot schedule + legacy migration."""
+"""15-minute slot schedule (YouTube) + recording cycle (Recordings)."""
 
 from __future__ import annotations
 
 import datetime as dt
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _ALL_DAYS_LIST = list(_WEEKDAYS)
 _LEGACY_KEYS = frozenset({"window_start", "window_stop", "interval_min", "duration_min"})
 SCHEDULE_TIMEZONE_LABEL = "Pacific/Honolulu"
 SCHEDULE_TIMEZONE = dt.timezone(dt.timedelta(hours=-10), SCHEDULE_TIMEZONE_LABEL)
+
+# Fixed daytime window the recording cycle operates within, in minutes
+# since local (Pacific/Honolulu) midnight. Deliberately not exposed as
+# user config: the operator asked for the simplest possible surface --
+# just record duration + pause duration -- and this fishpond deployment
+# only needs daylight footage. If a future deployment needs configurable
+# window bounds, they'd be added here alongside these constants.
+RECORDING_WINDOW_START_MIN = 7 * 60 + 45  # 07:45 HST
+RECORDING_WINDOW_STOP_MIN = 18 * 60       # 18:00 HST
+
+
+# Recording-cycle defaults. Kept module-local so the UI and config
+# module reference the same numbers.
+_DEFAULT_RECORD_SECS = 60
+_DEFAULT_PAUSE_SECS = 120
+
+
+def normalize_recordings_cycle(cycle: Any) -> Dict[str, Any]:
+    """Coerce untrusted input (loaded JSON or POST body) into a valid
+    ``{enabled, record_secs, pause_secs}`` dict. Non-positive record
+    durations fall back to the default so a stray 0 in config.json
+    doesn't wedge the scheduler; negative pauses become 0. Kept in
+    this module so both config.load() and the scheduler agree."""
+    if not isinstance(cycle, dict):
+        cycle = {}
+    try:
+        r = int(round(float(cycle.get("record_secs", _DEFAULT_RECORD_SECS))))
+    except (TypeError, ValueError):
+        r = _DEFAULT_RECORD_SECS
+    try:
+        p = int(round(float(cycle.get("pause_secs", _DEFAULT_PAUSE_SECS))))
+    except (TypeError, ValueError):
+        p = _DEFAULT_PAUSE_SECS
+    if r <= 0:
+        r = _DEFAULT_RECORD_SECS
+    if p < 0:
+        p = 0
+    return {
+        "enabled": bool(cycle.get("enabled", False)),
+        "record_secs": r,
+        "pause_secs": p,
+    }
+
+
+def recording_active(now: dt.datetime, cycle: Any) -> bool:
+    """True iff the recording cycle wants ffmpeg running at ``now``.
+
+    Rules, in order: cycle disabled -> False; outside the fixed HST
+    window -> False; otherwise the elapsed time from the window's start
+    is mapped into the (record + pause) sawtooth and we return True
+    during the record phase. Boundary at t == record_secs is treated as
+    the start of the pause (strict ``<``), matching how the scheduler
+    tick will see the transition."""
+    c = normalize_recordings_cycle(cycle)
+    if not c["enabled"]:
+        return False
+    mins = _minutes_since_midnight(now)
+    if mins < RECORDING_WINDOW_START_MIN or mins >= RECORDING_WINDOW_STOP_MIN:
+        return False
+    # Elapsed seconds since the window opened today, including the
+    # sub-minute component so the cycle boundary is precise even though
+    # the scheduler ticks at 2s.
+    elapsed = (mins - RECORDING_WINDOW_START_MIN) * 60 + now.second
+    cycle_len = c["record_secs"] + c["pause_secs"]
+    if cycle_len <= 0:
+        return False
+    return (elapsed % cycle_len) < c["record_secs"]
+
+
+def recording_preview(cycle: Any) -> Dict[str, Any]:
+    """Return a preview summary the UI can render below the two inputs:
+    how many recordings the cycle produces per day and their total
+    duration. ``valid`` is false with a human-readable ``reason`` if
+    the input is malformed (0 record duration, etc.) so the UI can
+    surface it without duplicating the check."""
+    c = normalize_recordings_cycle(cycle)
+    r = c["record_secs"]
+    p = c["pause_secs"]
+    window_secs = (RECORDING_WINDOW_STOP_MIN - RECORDING_WINDOW_START_MIN) * 60
+    if r <= 0:
+        return {
+            "valid": False,
+            "reason": "Record duration must be positive.",
+            "n_recordings": 0,
+            "total_recorded_secs": 0,
+            "cycle_secs": max(0, r + p),
+            "window_secs": window_secs,
+        }
+    cycle_len = r + p
+    full = window_secs // cycle_len
+    remainder = window_secs - full * cycle_len
+    partial = min(remainder, r)
+    n = full + (1 if partial > 0 else 0)
+    total = full * r + partial
+    return {
+        "valid": True,
+        "reason": "",
+        "n_recordings": int(n),
+        "total_recorded_secs": int(total),
+        "cycle_secs": int(cycle_len),
+        "window_secs": int(window_secs),
+    }
 
 
 def schedule_now() -> dt.datetime:

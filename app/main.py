@@ -23,7 +23,13 @@ import youtube_monitor
 from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import MIN_SEGMENT_BYTES, Recorder
-from scheduler import has_remaining_slots_today, schedule_now, should_be_on, slot_active
+from scheduler import (
+    has_remaining_slots_today,
+    recording_active,
+    recording_preview,
+    schedule_now,
+    should_be_on,
+)
 from usb_storage import (
     USB_MOUNT_POINT,
     get_free_mb,
@@ -80,18 +86,25 @@ def _recorder_should_continue() -> bool:
     """True iff we expect to still be recording RECORDER_TAIL_GUARD_SECS
     from now. The recorder calls this between segments; if it returns
     False the supervisor exits cleanly instead of spawning a fresh 5-min
-    ffmpeg that will be SIGINT'd seconds later when the slot boundary
-    arrives. Manual force-record always wins."""
+    ffmpeg that will be SIGINT'd seconds later when the record phase
+    ends. Manual force-record always wins.
+
+    Under the record/pause cycle model, most operator setups run with
+    record_secs < 5 min so at most one segment per burst is produced
+    and this guard is effectively a no-op -- the scheduler tick tears
+    ffmpeg down at the record->pause boundary before a second segment
+    would ever start. For record_secs >= 5 min the guard still avoids
+    the "spawn ffmpeg, get SIGINT'd 10 s later" stub problem."""
     try:
         with _state_lock:
             if _recording_force:
                 return True
         cfg = cfgmod.load()
-        rs = cfg.get("recordings_schedule") or {}
-        if not rs.get("enabled", False):
+        rc = cfg.get("recordings_cycle") or {}
+        if not rc.get("enabled", False):
             return False
         soon = schedule_now() + dt.timedelta(seconds=RECORDER_TAIL_GUARD_SECS)
-        return slot_active(soon, rs)
+        return recording_active(soon, rc)
     except Exception:
         logger.exception("recorder_should_continue")
         # Fail safe: keep recording rather than silently stopping.
@@ -586,21 +599,25 @@ def _scheduler_loop() -> None:
                     except Exception:
                         logger.exception("youtube_api.complete_today failed")
 
-            # Recordings desired
-            rs = cfg["recordings_schedule"]
-            sched_rec = rs.get("enabled", False) and should_be_on(now, rs)
+            # Recordings desired: fixed 07:45-18:00 HST daytime window,
+            # cycling record_secs on / pause_secs off. The
+            # `recording_active` helper collapses both the enabled flag
+            # and the window / cycle math into a single bool so this
+            # loop stays tiny.
+            rc = cfg["recordings_cycle"]
+            sched_rec = rc.get("enabled", False) and recording_active(now, rc)
             with _state_lock:
                 rforce = _recording_force
             want_rec = rforce or sched_rec
             if want_rec:
                 if not recorder.is_running():
-                    # Mirror the recorder's own schedule-aware guard: if
-                    # the slot is going to end within
+                    # Mirror the recorder's own tail guard: if the
+                    # current record phase is going to end within
                     # RECORDER_TAIL_GUARD_SECS, don't bother spinning up
-                    # ffmpeg only for the supervisor to immediately bail.
-                    # Without this check the loop would churn through
-                    # rapid start->bail cycles for the last ~30 s of
-                    # every slot.
+                    # ffmpeg only for the supervisor to immediately
+                    # bail. Without this check the loop would churn
+                    # through rapid start->bail cycles for the last
+                    # ~30 s of every burst.
                     if not _recorder_should_continue():
                         time.sleep(SCHEDULER_TICK_SECS)
                         continue
@@ -1188,22 +1205,36 @@ def proxy_snapshot():
 def rec_config():
     if request.method == "GET":
         cfg = cfgmod.load()
+        cycle = cfg.get("recordings_cycle") or {}
         return jsonify(
             {
-                "schedule": cfg.get("recordings_schedule"),
+                "cycle": cycle,
+                "preview": recording_preview(cycle),
                 "storage": cfg.get("recordings_storage"),
                 "profile": cfg.get("recordings_profile"),
             }
         )
     j = request.get_json(force=True, silent=True) or {}
     patch: Dict[str, Any] = {}
+    if "cycle" in j and isinstance(j["cycle"], dict):
+        patch["recordings_cycle"] = j["cycle"]
     if "schedule" in j:
-        patch["recordings_schedule"] = j["schedule"]
+        # Legacy client (pre-cycle UI). Silently drop rather than 400ing
+        # so a stale browser tab doesn't wedge settings saves.
+        logger.info("recordings config: dropping legacy 'schedule' key from POST body")
     if "storage" in j:
         patch["recordings_storage"] = j["storage"]
     if "profile" in j:
         patch["recordings_profile"] = j["profile"]
-    return jsonify(cfgmod.update(patch))
+    updated = cfgmod.update(patch)
+    return jsonify(
+        {
+            "cycle": updated.get("recordings_cycle"),
+            "preview": recording_preview(updated.get("recordings_cycle") or {}),
+            "storage": updated.get("recordings_storage"),
+            "profile": updated.get("recordings_profile"),
+        }
+    )
 
 
 @app.route("/api/recordings/start", methods=["POST"])

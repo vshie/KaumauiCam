@@ -240,7 +240,22 @@
 
           <section v-show="tab === 'rec'" class="tab-panel">
             <div class="panel">
-              <h2>Scheduled recordings</h2>
+              <h2>Recordings</h2>
+              <label class="ck-row">
+                <input type="checkbox" v-model="recEnabled" />
+                Enable daily recording cycle (7:45 AM – 6:00 PM HST)
+              </label>
+              <div class="row">
+                <div>
+                  <label>Record duration (minutes)</label>
+                  <input type="number" v-model.number="recRecordMin" min="0.1" step="0.1" />
+                </div>
+                <div>
+                  <label>Pause between recordings (minutes)</label>
+                  <input type="number" v-model.number="recPauseMin" min="0" step="0.1" />
+                </div>
+              </div>
+              <p class="status-line hint">{{ recPreviewLine }}</p>
               <label>Storage</label>
               <select v-model="recStorage">
                 <option value="auto">Auto (USB if mounted, else SD)</option>
@@ -249,7 +264,6 @@
               </select>
               <label>Stream profile (URL param)</label>
               <input type="text" v-model="recProfile" />
-              <schedule-editor v-model="draftRec" />
               <div class="row">
                 <button type="button" class="btn" @click="saveRecordings">Save</button>
                 <button type="button" class="btn" @click="recordNow">Record now</button>
@@ -264,7 +278,7 @@
               <div class="bar" v-if="storageHasBar">
                 <div :style="{ width: storageUsedPct + '%' }"></div>
               </div>
-              <p class="status-line hint">Recordings are saved as 5-minute MP4 segments while the session is active.</p>
+              <p class="status-line hint">Recordings save as MP4 files; long recordings are split into 5-minute segments.</p>
               <div class="row">
                 <button
                   type="button"
@@ -750,8 +764,10 @@
                 overheadPct: 3,
                 recStorage: "auto",
                 recProfile: "DefaultFishPond",
+                recEnabled: false,
+                recRecordMin: 1.0,
+                recPauseMin: 2.0,
                 draftYt: cloneSched({}),
-                draftRec: cloneSched({}),
                 bannerText: "",
                 bannerClass: "",
                 webrtcStatus: "Disconnected.",
@@ -797,6 +813,37 @@
               };
             },
             computed: {
+              recPreviewLine: function () {
+                // Same math as scheduler.recording_preview() in
+                // app/scheduler.py; kept client-side too so the
+                // preview updates as the operator types without a
+                // roundtrip. Fixed 07:45-18:00 HST window = 36900 s.
+                var windowSecs = 36900;
+                var r = (this.recRecordMin || 0) * 60;
+                var p = (this.recPauseMin || 0) * 60;
+                if (!(r > 0)) {
+                  return "Enter a positive record duration.";
+                }
+                if (p < 0) p = 0;
+                var cycle = r + p;
+                var full = Math.floor(windowSecs / cycle);
+                var rem = windowSecs - full * cycle;
+                var partial = Math.min(rem, r);
+                var n = full + (partial > 0 ? 1 : 0);
+                var total = full * r + partial;
+                function fmt(secs) {
+                  secs = Math.round(secs);
+                  var h = Math.floor(secs / 3600);
+                  var m = Math.floor((secs % 3600) / 60);
+                  var s = secs % 60;
+                  if (h > 0) return h + "h " + m + "m";
+                  if (m > 0) return m + "m " + (s ? s + "s" : "").trim();
+                  return s + "s";
+                }
+                return "About " + n + " recording" + (n === 1 ? "" : "s") +
+                  " per day totalling " + fmt(total) +
+                  " of video (window 7:45 AM – 6:00 PM HST).";
+              },
               storageBadgeText: function () {
                 var s = this.storageInfo;
                 if (!s) return "—";
@@ -1000,19 +1047,29 @@
                     self.overheadPct = c.bandwidth_overhead_pct != null ? c.bandwidth_overhead_pct : 3;
                     self.recStorage = c.recordings_storage || "auto";
                     self.recProfile = c.recordings_profile || "DefaultFishPond";
+                    var rc = c.recordings_cycle || {};
+                    self.recEnabled = !!rc.enabled;
+                    // Config stores whole seconds; the UI exposes decimal
+                    // minutes to one dp so the operator can type "0.5"
+                    // for a 30-second clip. Divide first, then round to
+                    // 1 dp to avoid the 60/60 -> 0.9999... rendering
+                    // wart.
+                    self.recRecordMin = rc.record_secs != null
+                      ? Math.round((rc.record_secs / 60) * 10) / 10
+                      : 1.0;
+                    self.recPauseMin = rc.pause_secs != null
+                      ? Math.round((rc.pause_secs / 60) * 10) / 10
+                      : 2.0;
                     self.solarEnabled = c.solar_enabled !== false;
                     self.solarHost = c.solar_host || "192.168.20.66";
                     self.solarInterval = c.solar_interval_secs != null ? c.solar_interval_secs : 60;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
-                    var storedRec = useStoredDraft ? loadStoredDraft("rec") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
-                    self.draftRec = storedRec || cloneSched(c.recordings_schedule || {});
                   })
                   .catch(function (e) {
                     self.bannerText = "Failed to load config: " + e.message;
                     self.bannerClass = "err";
                     self.draftYt = cloneSched({});
-                    self.draftRec = cloneSched({});
                   });
               },
               pollPtz: function () {
@@ -1514,12 +1571,21 @@
               },
               saveRecordings: function () {
                 var self = this;
+                // Convert decimal minutes back to whole seconds; the
+                // backend normalises anyway but rounding here keeps the
+                // POST body stable for the (rare) case of a slow
+                // network + retry.
+                var recordSecs = Math.max(1, Math.round((this.recRecordMin || 0) * 60));
+                var pauseSecs = Math.max(0, Math.round((this.recPauseMin || 0) * 60));
                 this.api("POST", "/api/recordings/config", {
-                  schedule: this.draftRec,
+                  cycle: {
+                    enabled: !!this.recEnabled,
+                    record_secs: recordSecs,
+                    pause_secs: pauseSecs,
+                  },
                   storage: this.recStorage,
                   profile: String(this.recProfile || "").trim(),
                 }).then(function () {
-                  clearStoredDraft("rec");
                   alert("Saved.");
                   self.loadConfig({ force: true });
                 });
@@ -1687,12 +1753,6 @@
               draftYt: {
                 handler: function (v) {
                   saveStoredDraft("yt", v);
-                },
-                deep: true,
-              },
-              draftRec: {
-                handler: function (v) {
-                  saveStoredDraft("rec", v);
                 },
                 deep: true,
               },
