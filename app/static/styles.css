@@ -574,7 +574,7 @@ tr.sess-stopped td { color: var(--muted); }
 }
 
 /*
-  One 48-column grid containing both the ruler row (grid-row 1) and the cell row (grid-row 2).
+  One 44-column grid containing both the ruler row (grid-row 1) and the cell row (grid-row 2).
   Ruler hour headers span 4 columns each; their label sits over the LEFT edge of that block
   with a small vertical tick that points to the first cell's left edge. The trailing 18:00
   label is pinned to the right edge of the grid. Because ruler and cells share the exact same
@@ -582,7 +582,7 @@ tr.sess-stopped td { color: var(--muted); }
 */
 .sched-grid {
   display: grid;
-  grid-template-columns: repeat(48, minmax(3px, 1fr));
+  grid-template-columns: repeat(44, minmax(3px, 1fr));
   grid-template-rows: auto 1fr;
   column-gap: 2px;
   row-gap: 4px;
@@ -627,7 +627,7 @@ tr.sess-stopped td { color: var(--muted); }
 
 .sched-ruler-end {
   grid-row: 1;
-  grid-column: 48 / -1;
+  grid-column: 44 / -1;
   position: relative;
   height: 1.35rem;
 }

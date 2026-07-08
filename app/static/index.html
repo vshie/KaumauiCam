@@ -581,8 +581,8 @@
             }
           }
 
-          var FIRST_IDX = 24; // 06:00
-          var SLOT_COUNT = 48; // 12 hours * 4 slots
+          var FIRST_IDX = 28; // 07:00
+          var SLOT_COUNT = 44; // 11 hours * 4 slots
 
           var ScheduleEditor = {
             props: { modelValue: { type: Object, required: true } },
@@ -607,14 +607,14 @@
                 return a;
               },
               hourLabels: function () {
-                var h0 = Math.floor(FIRST_IDX / 4); // 6
-                var n = SLOT_COUNT / 4; // 12 -> 06..17
+                var h0 = Math.floor(FIRST_IDX / 4); // 7
+                var n = SLOT_COUNT / 4; // 11 -> 07..17
                 var out = [];
                 for (var h = 0; h < n; h++) out.push(String(h0 + h).padStart(2, "0"));
                 return out;
               },
               endLabel: function () {
-                var endHour = Math.floor(FIRST_IDX / 4) + SLOT_COUNT / 4; // 18
+                var endHour = Math.floor(FIRST_IDX / 4) + SLOT_COUNT / 4; // 18 (07 + 11)
                 return String(endHour).padStart(2, "0");
               },
               rangesToday: function () {
