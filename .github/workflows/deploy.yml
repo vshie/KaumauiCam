@@ -19,7 +19,7 @@ jobs:
           docker-password: ${{ secrets.DOCKER_PASSWORD }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           image-name: "kaumaui_cam"
-          build-platforms: "linux/arm64/v8,linux/arm/v7"
+          build-platforms: "linux/amd64,linux/arm64/v8,linux/arm/v7"
           author: ${{ vars.MY_NAME }}
           author-email: ${{ vars.MY_EMAIL }}
           maintainer: ${{ vars.ORG_NAME }}

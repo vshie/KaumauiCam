@@ -16,7 +16,7 @@ Repository variables (example names from workflow):
 
 - `MY_NAME`, `MY_EMAIL`, `ORG_NAME`, `ORG_EMAIL`
 
-On **push**, the workflow builds **linux/arm64** and **linux/arm/v7** and publishes the extension image.
+On **push**, the workflow builds **linux/amd64**, **linux/arm64**, and **linux/arm/v7** and publishes the extension image.
 
 ## Manual installation (BlueOS Extensions Manager)
 
@@ -64,12 +64,12 @@ What it grants:
 - **Privileged: true** — required to mount external exFAT / NTFS USB drives from inside the container.
 - **PortBindings** — maps `6042/tcp` to a host port (BlueOS surfaces it in the Extensions UI).
 
-## Local image / tar (manual install on Pi)
+## Local image / tar (manual install)
 
-From this directory:
+From this directory (use `linux/amd64` on an x86 BlueOS host, `linux/arm64` on a Pi):
 
 ```bash
-docker buildx build --platform linux/arm64 \
+docker buildx build --platform linux/amd64 \
   -t vshie/kaumaui_cam:dev --load .
 docker save vshie/kaumaui_cam:dev -o kaumaui_cam.tar
 ```
@@ -85,7 +85,7 @@ docker save vshie/kaumaui_cam:dev | gzip > kaumaui_cam.tar.gz
 For multi-arch without `--load`:
 
 ```bash
-docker buildx build --platform linux/arm64,linux/arm/v7 \
+docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
   -t vshie/kaumaui_cam:dev --push .
 ```
 
