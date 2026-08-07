@@ -7,6 +7,7 @@ import datetime as dt
 import logging
 import logging.handlers
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, Tuple
@@ -20,7 +21,14 @@ import link_uptime
 import solar
 import youtube_api
 import youtube_monitor
-from camera import AxisCamera
+from camera import (
+    AxisCamera,
+    RTSP_PURPOSE_LIVE,
+    RTSP_PURPOSE_RECORD,
+    RTSP_PURPOSE_YOUTUBE,
+    resolve_rtsp_url,
+    resolved_rtsp_urls,
+)
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import MIN_SEGMENT_BYTES, Recorder
 from scheduler import (
@@ -266,27 +274,38 @@ def _apply_boot() -> None:
     if _boot_applied:
         return
     _boot_applied = True
+    cfg = cfgmod.load()
+    axis_mode = str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom"
+    # VAPIX stream-profile provisioning only applies to Axis cameras.
+    if axis_mode:
+        try:
+            cam = _camera()
+            cam.ensure_defaultfishpond_profile()
+        except Exception as e:
+            logger.warning("boot fishpond profile: %s", e)
+        try:
+            cam = _camera()
+            ok, msg = cam.ensure_youtubelive_profile()
+            logger.info("boot youtubelive profile: %s (%s)", msg, ok)
+        except Exception as e:
+            logger.warning("boot youtubelive profile: %s", e)
+    else:
+        logger.info("boot: rtsp_mode=custom — skipping Axis VAPIX profile provisioning")
     try:
-        cam = _camera()
-        cam.ensure_defaultfishpond_profile()
-    except Exception as e:
-        logger.warning("boot fishpond profile: %s", e)
-    try:
-        cam = _camera()
-        ok, msg = cam.ensure_youtubelive_profile()
-        logger.info("boot youtubelive profile: %s (%s)", msg, ok)
-    except Exception as e:
-        logger.warning("boot youtubelive profile: %s", e)
-    try:
-        cam = _camera()
-        rtsp = cam.rtsp_url("livepreview")
+        rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE)
+        logger.info("boot livepreview RTSP: %s", _redact_rtsp(rtsp))
         render_config(rtsp)
         go2rtc_sup.start()
     except Exception as e:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.3.8"
+def _redact_rtsp(url: str) -> str:
+    """Hide password in RTSP URLs written to logs."""
+    return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
+
+
+_EXTENSION_VERSION = "0.3.9"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -369,8 +388,7 @@ def _scheduler_loop() -> None:
                     key = (cfg.get("youtube_stream_key") or "").strip()
             if want_yt and key:
                 if not youtube_streamer.is_running():
-                    cam = _camera()
-                    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
+                    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE)
                     if youtube_streamer.start(rtsp, key):
                         now_ts = time.time()
                         with _state_lock:
@@ -633,9 +651,7 @@ def _scheduler_loop() -> None:
                         time.sleep(5)
                         continue
                     _recording_error = None
-                    cam = _camera()
-                    prof = cfg.get("recordings_profile", "DefaultFishPond")
-                    rtsp = cam.rtsp_url(prof)
+                    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD)
                     if not recorder.start(rtsp, dest):
                         _recording_error = "Recorder failed to start"
             else:
@@ -721,13 +737,27 @@ def health():
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        return jsonify(cfgmod.load())
+        cfg = cfgmod.load()
+        out = dict(cfg)
+        out["rtsp_resolved"] = resolved_rtsp_urls(cfg)
+        return jsonify(out)
     data = request.get_json(force=True, silent=True) or {}
     out = cfgmod.update(data)
-    if any(k in data for k in ("camera_host", "camera_user", "camera_pass")):
+    rtsp_keys = (
+        "camera_host",
+        "camera_user",
+        "camera_pass",
+        "rtsp_mode",
+        "rtsp_url_live",
+        "rtsp_url_youtube",
+        "rtsp_url_record",
+        "recordings_profile",
+    )
+    if any(k in data for k in rtsp_keys):
         try:
-            cam = _camera()
-            render_config(cam.rtsp_url("livepreview"))
+            rtsp = resolve_rtsp_url(out, RTSP_PURPOSE_LIVE)
+            logger.info("go2rtc reload RTSP: %s", _redact_rtsp(rtsp))
+            render_config(rtsp)
             go2rtc_sup.stop()
             go2rtc_sup.start()
         except Exception as e:
@@ -740,7 +770,9 @@ def api_config():
             youtube_monitor.poke()
         except Exception:
             logger.exception("youtube_monitor.poke after config save failed")
-    return jsonify(out)
+    out_resp = dict(out)
+    out_resp["rtsp_resolved"] = resolved_rtsp_urls(out)
+    return jsonify(out_resp)
 
 
 @app.route("/api/ptz/position", methods=["GET"])
@@ -820,12 +852,12 @@ def stream_start():
             return jsonify({"error": "youtube_stream_key empty"}), 400
     with _state_lock:
         _youtube_force = True
-    cam = _camera()
     try:
-        cam.ensure_youtubelive_profile()
+        if str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom":
+            _camera().ensure_youtubelive_profile()
     except Exception as e:
         logger.warning("ensure youtubelive on stream/start: %s", e)
-    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
+    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE)
     if youtube_streamer.start(rtsp, key):
         now_ts = time.time()
         with _state_lock:
@@ -1166,9 +1198,14 @@ def solar_poke():
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
 def ensure_livepreview():
     try:
+        cfg = cfgmod.load()
+        if str(cfg.get("rtsp_mode") or "axis").strip().lower() == "custom":
+            return jsonify({
+                "ok": False,
+                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
+            }), 400
         ok, msg = _camera().ensure_livepreview_profile()
-        cam = _camera()
-        render_config(cam.rtsp_url("livepreview"))
+        render_config(resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE))
         return jsonify({"ok": ok, "message": msg})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1177,6 +1214,11 @@ def ensure_livepreview():
 @app.route("/api/camera/ensure-fishpond", methods=["POST"])
 def ensure_fishpond():
     try:
+        if str(cfgmod.load().get("rtsp_mode") or "axis").strip().lower() == "custom":
+            return jsonify({
+                "ok": False,
+                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
+            }), 400
         _camera().ensure_defaultfishpond_profile()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1186,6 +1228,11 @@ def ensure_fishpond():
 @app.route("/api/camera/ensure-youtubelive", methods=["POST"])
 def ensure_youtubelive():
     try:
+        if str(cfgmod.load().get("rtsp_mode") or "axis").strip().lower() == "custom":
+            return jsonify({
+                "ok": False,
+                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
+            }), 400
         ok, msg = _camera().ensure_youtubelive_profile()
         return jsonify({"ok": ok, "message": msg})
     except Exception as e:
@@ -1250,9 +1297,7 @@ def rec_start():
         return jsonify({"error": msg}), 400
     with _state_lock:
         _recording_force = True
-    cam = _camera()
-    prof = cfg.get("recordings_profile", "DefaultFishPond")
-    rtsp = cam.rtsp_url(prof)
+    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD)
     if recorder.start(rtsp, dest):
         _recording_error = None
         return jsonify({"ok": True, "dest": dest, "label": label})

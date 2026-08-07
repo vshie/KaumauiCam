@@ -329,6 +329,60 @@
                   <input type="password" v-model="camPass" />
                 </div>
               </div>
+              <h2 class="h2-spaced">RTSP URL</h2>
+              <p class="status-line hint">
+                Live preview, YouTube, and recording all pull from the RTSP URL below.
+                Axis cameras use <code>/axis-media/media.amp?streamprofile=…</code>;
+                other brands need a custom path (Dahua / iCamra style is a common example).
+              </p>
+              <div class="row rtsp-mode-row">
+                <label class="ck-row">
+                  <input type="radio" value="axis" v-model="rtspMode" />
+                  Axis format
+                </label>
+                <label class="ck-row">
+                  <input type="radio" value="custom" v-model="rtspMode" />
+                  Custom URL
+                </label>
+              </div>
+              <label>Live preview RTSP URL</label>
+              <input
+                type="text"
+                class="rtsp-url-input"
+                v-model="rtspUrlLive"
+                :readonly="rtspMode !== 'custom'"
+                :placeholder="rtspMode === 'custom' ? 'rtsp://user:pass@host:554/…' : ''"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              <template v-if="rtspMode === 'custom'">
+                <label>YouTube RTSP URL <span class="hint">(optional — blank uses live preview)</span></label>
+                <input
+                  type="text"
+                  class="rtsp-url-input"
+                  v-model="rtspUrlYoutube"
+                  placeholder="same as live preview"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <label>Recording RTSP URL <span class="hint">(optional — blank uses live preview)</span></label>
+                <input
+                  type="text"
+                  class="rtsp-url-input"
+                  v-model="rtspUrlRecord"
+                  placeholder="same as live preview"
+                  spellcheck="false"
+                  autocomplete="off"
+                />
+                <div class="row row-actions-spaced">
+                  <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill Dahua / iCamra style</button>
+                  <button type="button" class="btn btn-secondary" @click="fillAxisRtsp">Fill Axis style</button>
+                </div>
+              </template>
+              <p class="status-line hint" v-if="rtspMode === 'axis'">
+                Built from host / user / password + the <code>livepreview</code> stream profile.
+                Switch to Custom to edit freely.
+              </p>
               <h2 class="h2-spaced">Quota</h2>
               <label>Monthly quota (GB, 0 = no bar cap)</label>
               <input type="number" v-model.number="quotaGb" step="0.1" min="0" />
@@ -337,8 +391,8 @@
               <div class="row">
                 <button type="button" class="btn" @click="saveSettings">Save settings</button>
                 <button type="button" class="btn btn-secondary" @click="resetBw">Reset month bandwidth counter</button>
-                <button type="button" class="btn btn-secondary" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
-                <button type="button" class="btn btn-secondary" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
+                <button type="button" class="btn btn-secondary" :disabled="rtspMode === 'custom'" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
+                <button type="button" class="btn btn-secondary" :disabled="rtspMode === 'custom'" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
               </div>
               <p class="status-line">Month counter resets automatically at local midnight on the 1st (by calendar month sum).</p>
             </div>
@@ -738,6 +792,10 @@
                 camHost: "",
                 camUser: "",
                 camPass: "",
+                rtspMode: "axis",
+                rtspUrlLive: "",
+                rtspUrlYoutube: "",
+                rtspUrlRecord: "",
                 ytKey: "",
                 ytChannelUrl: "",
                 ytAutorestart: true,
@@ -1031,6 +1089,14 @@
                     self.camHost = c.camera_host || "";
                     self.camUser = c.camera_user || "";
                     self.camPass = c.camera_pass || "";
+                    self.rtspMode = (c.rtsp_mode === "custom") ? "custom" : "axis";
+                    var resolved = c.rtsp_resolved || {};
+                    self.rtspUrlLive = c.rtsp_url_live || resolved.livepreview || "";
+                    self.rtspUrlYoutube = c.rtsp_url_youtube || "";
+                    self.rtspUrlRecord = c.rtsp_url_record || "";
+                    if (self.rtspMode === "axis") {
+                      self.rtspUrlLive = resolved.livepreview || self.buildAxisRtsp("livepreview");
+                    }
                     self.ytKey = c.youtube_stream_key || "";
                     self.ytChannelUrl = c.youtube_channel_url || "";
                     self.ytAutorestart = c.youtube_health_autorestart !== false;
@@ -1646,16 +1712,48 @@
               },
               saveSettings: function () {
                 var self = this;
-                this.api("POST", "/api/config", {
+                var payload = {
                   camera_host: String(this.camHost || "").trim(),
                   camera_user: String(this.camUser || "").trim(),
                   camera_pass: this.camPass,
+                  rtsp_mode: this.rtspMode === "custom" ? "custom" : "axis",
                   monthly_quota_gb: parseFloat(this.quotaGb) || 0,
                   bandwidth_overhead_pct: parseFloat(this.overheadPct) || 0,
-                }).then(function () {
+                };
+                if (payload.rtsp_mode === "custom") {
+                  payload.rtsp_url_live = String(this.rtspUrlLive || "").trim();
+                  payload.rtsp_url_youtube = String(this.rtspUrlYoutube || "").trim();
+                  payload.rtsp_url_record = String(this.rtspUrlRecord || "").trim();
+                }
+                this.api("POST", "/api/config", payload).then(function (c) {
                   alert("Saved. Reload page if camera IP changed.");
-                  self.loadConfig();
+                  self.loadConfig({ force: true });
+                  if (c && c.rtsp_resolved && c.rtsp_resolved.livepreview) {
+                    self.rtspUrlLive = payload.rtsp_mode === "custom"
+                      ? (payload.rtsp_url_live || c.rtsp_resolved.livepreview)
+                      : c.rtsp_resolved.livepreview;
+                  }
                 });
+              },
+              buildAxisRtsp: function (profile) {
+                var host = String(this.camHost || "").trim();
+                var user = encodeURIComponent(String(this.camUser || ""));
+                var pass = encodeURIComponent(String(this.camPass || ""));
+                var q = profile ? ("?streamprofile=" + encodeURIComponent(profile)) : "";
+                return "rtsp://" + user + ":" + pass + "@" + host + ":554/axis-media/media.amp" + q;
+              },
+              buildDahuaRtsp: function () {
+                var host = String(this.camHost || "").trim();
+                var user = encodeURIComponent(String(this.camUser || ""));
+                var pass = encodeURIComponent(String(this.camPass || ""));
+                return "rtsp://" + user + ":" + pass + "@" + host + ":554/cam/realmonitor?channel=1&subtype=0";
+              },
+              fillDahuaRtsp: function () {
+                this.rtspMode = "custom";
+                this.rtspUrlLive = this.buildDahuaRtsp();
+              },
+              fillAxisRtsp: function () {
+                this.rtspUrlLive = this.buildAxisRtsp("livepreview");
               },
               resetBw: function () {
                 var self = this;
@@ -1755,6 +1853,22 @@
                   saveStoredDraft("yt", v);
                 },
                 deep: true,
+              },
+              rtspMode: function (mode, prev) {
+                if (mode === "axis") {
+                  this.rtspUrlLive = this.buildAxisRtsp("livepreview");
+                } else if (prev === "axis" && !String(this.rtspUrlLive || "").trim()) {
+                  this.rtspUrlLive = this.buildAxisRtsp("livepreview");
+                }
+              },
+              camHost: function () {
+                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
+              },
+              camUser: function () {
+                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
+              },
+              camPass: function () {
+                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
               },
             },
             mounted: function () {

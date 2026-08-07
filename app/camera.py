@@ -1,4 +1,8 @@
-"""Axis VAPIX HTTP digest client for PTZ, snapshots, and stream profiles."""
+"""Axis VAPIX HTTP digest client for PTZ, snapshots, and stream profiles.
+
+Also owns RTSP URL resolution for Axis-built and free-form custom URLs
+(see ``resolve_rtsp_url``).
+"""
 
 from __future__ import annotations
 
@@ -11,6 +15,76 @@ import requests
 from requests.auth import HTTPDigestAuth
 
 logger = logging.getLogger(__name__)
+
+# Purpose keys passed to resolve_rtsp_url / exposed on GET /api/config.
+RTSP_PURPOSE_LIVE = "livepreview"
+RTSP_PURPOSE_YOUTUBE = "youtubelive"
+RTSP_PURPOSE_RECORD = "record"
+
+_CUSTOM_URL_KEYS = {
+    RTSP_PURPOSE_LIVE: "rtsp_url_live",
+    RTSP_PURPOSE_YOUTUBE: "rtsp_url_youtube",
+    RTSP_PURPOSE_RECORD: "rtsp_url_record",
+}
+
+
+def axis_rtsp_url(
+    host: str, user: str, password: str, streamprofile: Optional[str] = None
+) -> str:
+    """Build the Axis VAPIX RTSP URL for an optional stream profile name."""
+    u = quote(user or "", safe="")
+    p = quote(password or "", safe="")
+    q = f"?streamprofile={streamprofile}" if streamprofile else ""
+    return f"rtsp://{u}:{p}@{host}:554/axis-media/media.amp{q}"
+
+
+def dahua_style_rtsp_url(host: str, user: str, password: str, subtype: int = 0) -> str:
+    """Common Dahua / iCamra-compatible main/sub stream URL."""
+    u = quote(user or "", safe="")
+    p = quote(password or "", safe="")
+    return (
+        f"rtsp://{u}:{p}@{host}:554/cam/realmonitor"
+        f"?channel=1&subtype={int(subtype)}"
+    )
+
+
+def resolve_rtsp_url(cfg: Dict[str, Any], purpose: str) -> str:
+    """
+    Resolve the RTSP URL for live preview, YouTube, or recording.
+
+    In ``custom`` mode, returns the matching ``rtsp_url_*`` field. YouTube
+    and record fall back to ``rtsp_url_live`` when their own field is
+    empty. If still empty (or mode is ``axis``), builds the Axis URL from
+    host/user/pass + the appropriate stream profile name.
+    """
+    mode = str(cfg.get("rtsp_mode") or "axis").strip().lower()
+    if mode == "custom":
+        key = _CUSTOM_URL_KEYS.get(purpose, "rtsp_url_live")
+        url = str(cfg.get(key) or "").strip()
+        if not url and purpose != RTSP_PURPOSE_LIVE:
+            url = str(cfg.get("rtsp_url_live") or "").strip()
+        if url:
+            return url
+
+    host = str(cfg.get("camera_host") or "").strip()
+    user = str(cfg.get("camera_user") or "")
+    password = str(cfg.get("camera_pass") or "")
+    if purpose == RTSP_PURPOSE_YOUTUBE:
+        profile: Optional[str] = "youtubelive"
+    elif purpose == RTSP_PURPOSE_RECORD:
+        profile = str(cfg.get("recordings_profile") or "DefaultFishPond").strip() or None
+    else:
+        profile = "livepreview"
+    return axis_rtsp_url(host, user, password, profile)
+
+
+def resolved_rtsp_urls(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """Map of purpose → URL currently in effect (for Settings UI display)."""
+    return {
+        RTSP_PURPOSE_LIVE: resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE),
+        RTSP_PURPOSE_YOUTUBE: resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE),
+        RTSP_PURPOSE_RECORD: resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD),
+    }
 
 
 class AxisCamera:
@@ -31,10 +105,7 @@ class AxisCamera:
         return requests.post(url, auth=self.auth, timeout=self.timeout, **kwargs)
 
     def rtsp_url(self, streamprofile: Optional[str] = None) -> str:
-        u = quote(self.user, safe="")
-        p = quote(self.password, safe="")
-        q = f"?streamprofile={streamprofile}" if streamprofile else ""
-        return f"rtsp://{u}:{p}@{self.host}:554/axis-media/media.amp{q}"
+        return axis_rtsp_url(self.host, self.user, self.password, streamprofile)
 
     def ptz_position(self) -> Dict[str, Any]:
         r = self._get("/axis-cgi/com/ptz.cgi?query=position")

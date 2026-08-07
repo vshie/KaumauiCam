@@ -22,6 +22,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "camera_host": "192.168.20.20",
     "camera_user": "root",
     "camera_pass": "campass",
+    # RTSP URL mode. "axis" builds
+    # rtsp://user:pass@host:554/axis-media/media.amp?streamprofile=…
+    # from host/creds + profile name. "custom" uses the free-form
+    # rtsp_url_* fields below (non-Axis cameras, alternate paths, etc.).
+    # Empty custom fields fall back to the Axis builder so a partial
+    # config still yields a URL.
+    "rtsp_mode": "axis",  # axis | custom
+    "rtsp_url_live": "",
+    "rtsp_url_youtube": "",
+    "rtsp_url_record": "",
     "youtube_stream_key": "",
     "youtube_schedule": deepcopy(DEFAULT_SCHEDULE),
     # Recording cycle inside the fixed 7:45 AM - 6:00 PM HST daytime

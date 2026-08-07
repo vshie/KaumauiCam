@@ -743,8 +743,26 @@ tr.sess-stopped td { color: var(--muted); }
   font-size: 0.92rem;
   color: var(--text);
 }
-.ck-row input[type="checkbox"] {
+.ck-row input[type="checkbox"],
+.ck-row input[type="radio"] {
   margin: 0;
+}
+
+.rtsp-mode-row {
+  gap: 1.25rem;
+  margin: 0.4rem 0 0.75rem;
+}
+
+.rtsp-url-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.rtsp-url-input[readonly] {
+  opacity: 0.85;
+  cursor: default;
 }
 
 /* Status-page-style ribbon: each <rect> is one bucket (5 min by default).
