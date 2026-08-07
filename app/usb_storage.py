@@ -15,7 +15,7 @@ import time
 logger = logging.getLogger(__name__)
 
 USB_MOUNT_POINT = "/mnt/usb"
-KAUMAUI_DIR = "KaumauiCam"
+WAILOA_DIR = "WailoaCam"
 PROBE_INTERVAL_S = 30
 
 _lock = threading.Lock()
@@ -126,7 +126,7 @@ def _disk_usage(path: str) -> dict | None:
 
 
 def get_recording_dir_usb() -> str:
-    base = os.path.join(USB_MOUNT_POINT, KAUMAUI_DIR, "recordings")
+    base = os.path.join(USB_MOUNT_POINT, WAILOA_DIR, "recordings")
     os.makedirs(base, exist_ok=True)
     return base
 

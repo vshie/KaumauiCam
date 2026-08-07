@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0a1628" />
-    <title>Kaumaui Cam</title>
+    <title>Wailoa Cam</title>
     <script>
       (function () {
         var p = location.pathname;
@@ -24,7 +24,7 @@
           <div class="brand">
             <span class="brand-mark" aria-hidden="true"></span>
             <div class="brand-text">
-              <h1>Kaumaui Cam</h1>
+              <h1>Wailoa Cam</h1>
               <p class="tagline">Live view · PTZ · stream & record</p>
             </div>
           </div>
@@ -55,10 +55,10 @@
               <p class="status-line hint">{{ ytDeviceStatusLine }}</p>
               <p class="status-line hint" v-if="ytDeviceUrl">If the button is blocked, open <code>{{ ytDeviceUrl }}</code> manually.</p>
               <p class="status-line hint">
-                Not seeing the "Kaumaui Cam" app name after entering the code?
+                Not seeing the "Wailoa Cam" app name after entering the code?
                 You may see an <em>"Unverified app"</em> warning — that's expected for your own project;
                 click <em>Advanced ▸ Go to (app name) (unsafe)</em> to continue. See the
-                <a href="https://github.com/vshie/KaumauiCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">setup guide</a> for the full walk-through.
+                <a href="https://github.com/vshie/WailoaCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">setup guide</a> for the full walk-through.
               </p>
             </div>
           </div>
@@ -114,7 +114,7 @@
               </h2>
               <p class="status-line hint">
                 Hands-off daily streaming. When connected, the extension creates a fresh YouTube broadcast each day, promotes it to <em>live</em> once bytes are flowing, and closes it out at the end of the day — no YouTube Studio work required.
-                <a href="https://github.com/vshie/KaumauiCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">Setup guide ↗</a>
+                <a href="https://github.com/vshie/WailoaCam/blob/main/docs/youtube-api-setup.md" target="_blank" rel="noopener noreferrer">Setup guide ↗</a>
               </p>
               <div v-if="!ytApiConnected">
                 <label>OAuth client ID</label>
@@ -134,7 +134,7 @@
                   Use API mode (extension manages broadcasts automatically)
                 </label>
                 <label>Broadcast title template <span class="hint">(<code>{date}</code> is replaced with the HST date)</span></label>
-                <input type="text" v-model="ytBroadcastTitleTemplate" placeholder="Kaumaui Cam - {date}" />
+                <input type="text" v-model="ytBroadcastTitleTemplate" placeholder="Wailoa Cam - {date}" />
                 <label>Broadcast privacy</label>
                 <select v-model="ytBroadcastPrivacy">
                   <option value="public">Public (required for the /live health monitor)</option>
@@ -477,7 +477,7 @@
           var s = document.createElement("script");
           s.src = base + "static/vendor/vue.global.prod.js";
           s.onload = function () {
-            bootKaumauiVue();
+            bootWailoaVue();
           };
           s.onerror = function () {
             document.getElementById("app").innerHTML =
@@ -485,7 +485,7 @@
           };
           document.body.appendChild(s);
         }
-        function bootKaumauiVue() {
+        function bootWailoaVue() {
           var Vue = window.Vue;
           if (!Vue || !Vue.createApp) {
             document.getElementById("app").innerHTML = "<p>Vue not available.</p>";
@@ -745,7 +745,7 @@
                 ytOauthClientId: "",
                 ytOauthClientSecret: "",
                 ytApiMode: false,
-                ytBroadcastTitleTemplate: "Kaumaui Cam - {date}",
+                ytBroadcastTitleTemplate: "Wailoa Cam - {date}",
                 ytBroadcastPrivacy: "public",
                 ytOauthStatus: {
                   connected: false,
@@ -1041,7 +1041,7 @@
                     self.ytOauthClientSecret = c.youtube_oauth_client_secret || "";
                     self.ytApiMode = !!c.youtube_api_mode;
                     self.ytBroadcastTitleTemplate = c.youtube_broadcast_title_template
-                      || "Kaumaui Cam - {date}";
+                      || "Wailoa Cam - {date}";
                     self.ytBroadcastPrivacy = c.youtube_broadcast_privacy || "public";
                     self.quotaGb = c.monthly_quota_gb != null ? c.monthly_quota_gb : 100;
                     self.overheadPct = c.bandwidth_overhead_pct != null ? c.bandwidth_overhead_pct : 3;
@@ -1458,7 +1458,7 @@
                 var self = this;
                 this.api("POST", "/api/config", {
                   youtube_api_mode: !!this.ytApiMode,
-                  youtube_broadcast_title_template: String(this.ytBroadcastTitleTemplate || "Kaumaui Cam - {date}"),
+                  youtube_broadcast_title_template: String(this.ytBroadcastTitleTemplate || "Wailoa Cam - {date}"),
                   youtube_broadcast_privacy: String(this.ytBroadcastPrivacy || "public"),
                 }).then(function () {
                   self.loadConfig({ force: true });

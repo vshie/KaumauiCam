@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-DB_PATH = os.environ.get("KAUMAUI_STATE_DB", "/app/data/state.db")
+DB_PATH = os.environ.get("WAILOA_STATE_DB", "/app/data/state.db")
 _lock = threading.Lock()
 
 

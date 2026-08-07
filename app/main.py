@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kaumaui Cam BlueOS extension — Flask API + go2rtc proxy + schedulers."""
+"""Wailoa Cam BlueOS extension — Flask API + go2rtc proxy + schedulers."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from usb_storage import (
 from youtube import YouTubeStreamer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("kaumaui")
+logger = logging.getLogger("wailoa")
 
 # Number of seconds of look-ahead used by the recorder's schedule-aware
 # guard. Must be larger than the SCHEDULER_TICK_SECS / segment-rotation
@@ -202,8 +202,8 @@ def _can_start_recording(cfg: Dict[str, Any], dest_dir: str, label: str) -> Tupl
 # a persistent record across power cycles -- the same drive that holds the
 # recordings -- which is essential for diagnosing things like short or
 # 0-byte segments after the fact.
-USB_LOG_DIR = os.path.join(USB_MOUNT_POINT, "KaumauiCam", "logs")
-USB_LOG_FILE = os.path.join(USB_LOG_DIR, "kaumaui.log")
+USB_LOG_DIR = os.path.join(USB_MOUNT_POINT, "WailoaCam", "logs")
+USB_LOG_FILE = os.path.join(USB_LOG_DIR, "wailoa.log")
 USB_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB per file
 USB_LOG_BACKUP_COUNT = 5  # ~50 MB total
 _usb_log_handler: logging.Handler | None = None
@@ -355,7 +355,7 @@ def _scheduler_loop() -> None:
                         ensured = youtube_api.ensure_todays_broadcast(
                             title_template=cfg.get(
                                 "youtube_broadcast_title_template",
-                                "Kaumaui Cam - {date}",
+                                "Wailoa Cam - {date}",
                             ),
                             privacy=cfg.get("youtube_broadcast_privacy", "public"),
                         )
@@ -656,13 +656,13 @@ def register_service():
     """BlueOS helper: sidebar entry + metadata (GET)."""
     return jsonify(
         {
-            "name": "Kaumaui Cam",
+            "name": "Wailoa Cam",
             "description": "Axis live view, PTZ, YouTube Live scheduling, and local recordings.",
             "icon": "mdi-fish",
             "company": "Blue Robotics",
             "version": _EXTENSION_VERSION,
-            "webpage": "https://github.com/vshie/KaumauiCam",
-            "api": "https://github.com/vshie/KaumauiCam",
+            "webpage": "https://github.com/vshie/WailoaCam",
+            "api": "https://github.com/vshie/WailoaCam",
             "new_page": False,
             "works_in_relative_paths": True,
         }
@@ -715,7 +715,7 @@ def go2rtc_proxy(path: str):
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True, "service": "kaumaui-cam"})
+    return jsonify({"ok": True, "service": "wailoa-cam"})
 
 
 @app.route("/api/config", methods=["GET", "POST"])
@@ -805,7 +805,7 @@ def stream_start():
         try:
             ensured = youtube_api.ensure_todays_broadcast(
                 title_template=cfg.get(
-                    "youtube_broadcast_title_template", "Kaumaui Cam - {date}"
+                    "youtube_broadcast_title_template", "Wailoa Cam - {date}"
                 ),
                 privacy=cfg.get("youtube_broadcast_privacy", "public"),
             )
@@ -1415,7 +1415,7 @@ def rec_download(name: str):
 
 
 def main() -> None:
-    logger.info("Kaumaui Cam starting (camera may be offline; UI comes up first)")
+    logger.info("Wailoa Cam starting (camera may be offline; UI comes up first)")
     try:
         bandwidth.init_db()
     except Exception:

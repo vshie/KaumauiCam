@@ -68,7 +68,7 @@ import requests
 
 from scheduler import SCHEDULE_TIMEZONE
 
-logger = logging.getLogger("kaumaui.youtube-api")
+logger = logging.getLogger("wailoa.youtube-api")
 
 # ---------------------------------------------------------------------------
 # Endpoints and constants
@@ -105,11 +105,11 @@ DEVICE_POLL_MAX_SECS = 30 * 60.0
 # Persisted state file paths (override via env for tests).
 DEFAULT_DATA_DIR = "/app/data"
 OAUTH_STATE_PATH = os.environ.get(
-    "KAUMAUI_YT_OAUTH_STATE",
+    "WAILOA_YT_OAUTH_STATE",
     os.path.join(DEFAULT_DATA_DIR, "youtube_oauth.json"),
 )
 BROADCAST_STATE_PATH = os.environ.get(
-    "KAUMAUI_YT_BROADCAST_STATE",
+    "WAILOA_YT_BROADCAST_STATE",
     os.path.join(DEFAULT_DATA_DIR, "youtube_broadcast.json"),
 )
 
@@ -117,7 +117,7 @@ BROADCAST_STATE_PATH = os.environ.get(
 # and reuse the same stream across days rather than accumulating a fresh
 # stream key each time (YouTube quotas ``liveStreams.insert`` more
 # expensively than ``list``, and stray keys clutter Studio).
-PERSISTENT_STREAM_TITLE = "Kaumaui Cam (auto-managed)"
+PERSISTENT_STREAM_TITLE = "Wailoa Cam (auto-managed)"
 
 
 # ---------------------------------------------------------------------------
@@ -718,7 +718,7 @@ def ensure_reusable_stream() -> Dict[str, Any]:
             "snippet": {
                 "title": PERSISTENT_STREAM_TITLE,
                 "description": (
-                    "Auto-managed by Kaumaui Cam. Do not delete while the "
+                    "Auto-managed by Wailoa Cam. Do not delete while the "
                     "extension is running -- it will be reused day-to-day."
                 ),
             },
@@ -785,7 +785,7 @@ def _insert_broadcast(title: str, privacy: str) -> Dict[str, Any]:
                 "title": title,
                 "scheduledStartTime": _iso_now_utc(),
                 "description": (
-                    "Auto-created by Kaumaui Cam. Managed lifecycle: "
+                    "Auto-created by Wailoa Cam. Managed lifecycle: "
                     "start/stop is driven by the extension's schedule."
                 ),
             },
@@ -868,7 +868,7 @@ def _format_title(template: str, hst_date: str) -> str:
     try:
         return template.format(date=hst_date)
     except (KeyError, IndexError, ValueError):
-        return f"Kaumaui Cam - {hst_date}"
+        return f"Wailoa Cam - {hst_date}"
 
 
 def _watch_url(broadcast_id: str) -> str:
@@ -876,7 +876,7 @@ def _watch_url(broadcast_id: str) -> str:
 
 
 def ensure_todays_broadcast(
-    title_template: str = "Kaumaui Cam - {date}",
+    title_template: str = "Wailoa Cam - {date}",
     privacy: str = "public",
 ) -> Optional[Dict[str, Any]]:
     """Idempotently ensure a broadcast exists for today's HST date and

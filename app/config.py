@@ -87,7 +87,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "youtube_oauth_client_id": "",
     "youtube_oauth_client_secret": "",
     "youtube_api_mode": False,
-    "youtube_broadcast_title_template": "Kaumaui Cam - {date}",
+    "youtube_broadcast_title_template": "Wailoa Cam - {date}",
     "youtube_broadcast_privacy": "public",
     # Victron solar logger (see app/solar.py). Polls the on-board
     # ESPHome device (Fishpond) at ``solar_host`` every
@@ -100,7 +100,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "solar_interval_secs": 60.0,
 }
 
-CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")
+CONFIG_PATH = os.environ.get("WAILOA_CONFIG", "/app/data/config.json")
 _lock = threading.Lock()
 
 

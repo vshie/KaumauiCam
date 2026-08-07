@@ -25,9 +25,9 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("kaumaui.link")
+logger = logging.getLogger("wailoa.link")
 
-DB_PATH = os.environ.get("KAUMAUI_STATE_DB", "/app/data/state.db")
+DB_PATH = os.environ.get("WAILOA_STATE_DB", "/app/data/state.db")
 PING_TARGET = "8.8.8.8"
 # Probe cadence. 10s gives 8640 rows/day -- trivial for SQLite -- and a
 # fast enough signal that a 30-second outage shows up as ~3 missed bars

@@ -45,9 +45,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
-logger = logging.getLogger("kaumaui.yt-monitor")
+logger = logging.getLogger("wailoa.yt-monitor")
 
-DB_PATH = os.environ.get("KAUMAUI_STATE_DB", "/app/data/state.db")
+DB_PATH = os.environ.get("WAILOA_STATE_DB", "/app/data/state.db")
 
 # Polling cadence while a stream is supposed to be running. 30s gives
 # us 2 polls per minute, which matters most during the 6-minute kickoff

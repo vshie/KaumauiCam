@@ -30,9 +30,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Persisted alongside state.db / config.json — i.e. the host bind
-# /usr/blueos/extensions/kaumauicam, so the file survives container
+# /usr/blueos/extensions/wailoacam, so the file survives container
 # rebuilds and reboots without ever touching the USB drive.
-DEFAULT_CSV_PATH = os.environ.get("KAUMAUI_SOLAR_CSV", "/app/data/solar.csv")
+DEFAULT_CSV_PATH = os.environ.get("WAILOA_SOLAR_CSV", "/app/data/solar.csv")
 
 # Order is significant: this is the on-disk column order. ``timestamp_iso``
 # is required by spec to be column 1; the rest are grouped logically

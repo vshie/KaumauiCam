@@ -132,7 +132,7 @@ class Recorder:
         """
         assert self._dest_dir and self._rtsp_url
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        out = os.path.join(self._dest_dir, f"kaumaui-{ts}.mp4")
+        out = os.path.join(self._dest_dir, f"wailoa-{ts}.mp4")
         cmd = self._build_cmd(out)
         proc = subprocess.Popen(
             cmd,
@@ -285,7 +285,7 @@ class Recorder:
             os.makedirs(dest_dir, exist_ok=True)
             self._dest_dir = dest_dir
             self._rtsp_url = rtsp_url
-            self._pattern = os.path.join(dest_dir, "kaumaui-YYYYMMDD-HHMMSS.mp4")
+            self._pattern = os.path.join(dest_dir, "wailoa-YYYYMMDD-HHMMSS.mp4")
             self._stop.clear()
             self._stderr_lines = []
             self._supervisor = threading.Thread(

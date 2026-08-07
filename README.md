@@ -1,4 +1,4 @@
-# Kaumaui Cam — BlueOS extension
+# Wailoa Cam — BlueOS extension
 
 BlueOS extension for an Axis PTZ camera (fixed IP **192.168.20.20** by default): WebRTC live preview (`livepreview` 720p H.264 via **go2rtc**), VAPIX PTZ, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycle (default `DefaultFishPond` H.265 profile, fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
 
@@ -24,9 +24,9 @@ In **BlueOS → Extensions → Installed → +** (Create Extension), fill in:
 
 | Field | Value |
 |---|---|
-| Extension Identifier | `br.km` |
-| Extension Name | `Kaumaui Cam` |
-| Docker image | `vshie/blueos-kaumaui_cam` |
+| Extension Identifier | `br.wl` |
+| Extension Name | `Wailoa Cam` |
+| Docker image | `vshie/blueos-wailoa_cam` |
 | Docker tag | `main` |
 
 Paste the following into the **Permissions / Original Settings** JSON editor:
@@ -40,7 +40,7 @@ Paste the following into the **Permissions / Original Settings** JSON editor:
   },
   "HostConfig": {
     "Binds": [
-      "/usr/blueos/extensions/kaumauicam:/app/data",
+      "/usr/blueos/extensions/wailoacam:/app/data",
       "/dev:/dev",
       "/run/udev:/run/udev:ro"
     ],
@@ -57,7 +57,7 @@ What it grants:
 
 - **ExposedPorts** — `6042/tcp` (web UI / API), `8555/tcp` + `8555/udp` (go2rtc WebRTC/RTSP).
 - **Binds**
-  - `/usr/blueos/extensions/kaumauicam:/app/data` — persistent storage for SQLite, config, and the SD-fallback recordings folder.
+  - `/usr/blueos/extensions/wailoacam:/app/data` — persistent storage for SQLite, config, and the SD-fallback recordings folder.
   - `/dev:/dev` — USB camera / removable storage device nodes.
   - `/run/udev:/run/udev:ro` — hot-plug detection for USB drives.
 - **NetworkMode: host** — required for go2rtc / WebRTC and mDNS.
@@ -70,23 +70,23 @@ From this directory (use `linux/amd64` on an x86 BlueOS host, `linux/arm64` on a
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  -t vshie/kaumaui_cam:dev --load .
-docker save vshie/kaumaui_cam:dev -o kaumaui_cam.tar
+  -t vshie/wailoa_cam:dev --load .
+docker save vshie/wailoa_cam:dev -o wailoa_cam.tar
 ```
 
-`docker save` always produces a **tar** archive; using the **`.tar`** extension matches that. Install **kaumaui_cam.tar** from the BlueOS Extension Manager (“Load from file”).
+`docker save` always produces a **tar** archive; using the **`.tar`** extension matches that. Install **wailoa_cam.tar** from the BlueOS Extension Manager (“Load from file”).
 
 Optional smaller file (gzip-wrapped tar, still loadable after decompress or wherever your UI accepts it):
 
 ```bash
-docker save vshie/kaumaui_cam:dev | gzip > kaumaui_cam.tar.gz
+docker save vshie/wailoa_cam:dev | gzip > wailoa_cam.tar.gz
 ```
 
 For multi-arch without `--load`:
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
-  -t vshie/kaumaui_cam:dev --push .
+  -t vshie/wailoa_cam:dev --push .
 ```
 
 ## Runtime (BlueOS)
@@ -94,7 +94,7 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 - **HTTP UI:** port **6042** by default (host network; `PORT` env overrides). If busy, the app scans **6040–6060**.
 - **WebRTC (go2rtc):** **8555/tcp+udp** on the host (advertised in the extension `permissions` label).
 - **Data / SQLite / recordings fallback:** host bind  
-  `/usr/blueos/extensions/kaumauicam` → `/app/data`
+  `/usr/blueos/extensions/wailoacam` → `/app/data`
 
 ### Camera
 
@@ -119,7 +119,7 @@ The "kickoff" timer is per *broadcast attempt*, not per ffmpeg session — ffmpe
 
 - Capture: **RTSP → MPEG-TS** while recording, then **remux to MP4** on stop. Long recordings are split into **5-minute MP4 segments** so a wedged ffmpeg never loses more than one segment.
 - **Cycle model (Recordings tab):** the operator enables a daily cycle by entering just two numbers — **record duration** and **pause duration**, both in decimal minutes. The extension records for *R* minutes, pauses for *P* minutes, and repeats inside a fixed **07:45 AM – 6:00 PM HST** window every day (no weekday filter). The UI shows a live preview of how many clips per day the cycle produces and their total video duration.  Defaults are **1 min record / 2 min pause** (~205 clips per day, ~3h 25m of video). *Record now* / *Stop recording* buttons and manual PTZ / storage / files controls are unaffected by the cycle.
-- **USB:** first removable **`sd*`** partition mounted at `/mnt/usb/KaumauiCam/recordings`.
+- **USB:** first removable **`sd*`** partition mounted at `/mnt/usb/WailoaCam/recordings`.
 - **SD fallback:** `/app/data/recordings` — new clips **blocked** if free space is under **10 GB** on that filesystem.
 
 ### Solar logging (Victron MPPT via on-board ESPHome)
@@ -139,18 +139,18 @@ charging_mode, mppt_tracking, error,
 device_type, serial, firmware
 ```
 
-Numeric columns are stripped of their unit suffix (e.g. `26.83`, not `26.830 V`) so Excel / pandas parse them as numbers; the unit lives in the column name. Missing entities are written as empty cells rather than aborting the whole row, so a brief network blip on one sensor doesn't blank out the others. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/kaumauicam/solar.csv` on the host) so it survives container rebuilds.
+Numeric columns are stripped of their unit suffix (e.g. `26.83`, not `26.830 V`) so Excel / pandas parse them as numbers; the unit lives in the column name. Missing entities are written as empty cells rather than aborting the whole row, so a brief network blip on one sensor doesn't blank out the others. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/wailoacam/solar.csv` on the host) so it survives container rebuilds.
 
 ## Push this repo (you deploy)
 
-Repository: **https://github.com/vshie/KaumauiCam**
+Repository: **https://github.com/vshie/WailoaCam**
 
 ```bash
 git init
 git add .
-git commit -m "Initial Kaumaui Cam extension"
+git commit -m "Initial Wailoa Cam extension"
 git branch -M main
-git remote add origin git@github.com:vshie/KaumauiCam.git
+git remote add origin git@github.com:vshie/WailoaCam.git
 git push -u origin main
 ```
 

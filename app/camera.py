@@ -201,7 +201,7 @@ class AxisCamera:
         """Ensure stream profile 'livepreview' exists (720p H.264)."""
         return self._ensure_stream_profile(
             name="livepreview",
-            description="Kaumaui Cam live WebRTC preview",
+            description="Wailoa Cam live WebRTC preview",
             parameters="videocodec=h264&resolution=1280x720&fps=25&videobitratemode=vbr&videokeyframeinterval=50",
         )
 
@@ -228,7 +228,7 @@ class AxisCamera:
         """
         return self._ensure_stream_profile(
             name="youtubelive",
-            description="Kaumaui Cam YouTube live H.264 1080p30 4.5 Mbps cap",
+            description="Wailoa Cam YouTube live H.264 1080p30 4.5 Mbps cap",
             parameters=(
                 "videocodec=h264"
                 "&resolution=1920x1080"

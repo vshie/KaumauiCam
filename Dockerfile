@@ -83,7 +83,7 @@ LABEL permissions='\
  },\
  "HostConfig": {\
   "Binds": [\
-   "/usr/blueos/extensions/kaumauicam:/app/data",\
+   "/usr/blueos/extensions/wailoacam:/app/data",\
    "/dev:/dev",\
    "/run/udev:/run/udev:ro"\
   ],\
@@ -106,7 +106,7 @@ LABEL type="tool"
 ARG REPO
 ARG OWNER
 LABEL readme=''
-LABEL links='{"source":"https://github.com/vshie/KaumauiCam"}'
+LABEL links='{"source":"https://github.com/vshie/WailoaCam"}'
 LABEL requirements="core >= 1.1"
 
 COPY entrypoint.sh /entrypoint.sh
