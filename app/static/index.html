@@ -77,24 +77,34 @@
                 <p class="status-line">{{ webrtcStatus }}</p>
               </div>
               <div class="panel">
-                <h2>PTZ</h2>
+                <h2>Lens <span class="badge">{{ lensBadge }}</span></h2>
                 <p class="status-line">{{ ptzReadout }}</p>
-                <div class="ptz-pad">
-                  <span class="blank"></span>
-                  <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,40,0)" @touchend="ptzStop" aria-label="Tilt up">▲</button>
-                  <span class="blank"></span>
-                  <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(-40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(-40,0,0)" @touchend="ptzStop" aria-label="Pan left">◀</button>
-                  <button type="button" class="btn-secondary ptz-stop" @click="ptzStop" aria-label="Stop">■</button>
-                  <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(40,0,0)" @touchend="ptzStop" aria-label="Pan right">▶</button>
-                  <span class="blank"></span>
-                  <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,-40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,-40,0)" @touchend="ptzStop" aria-label="Tilt down">▼</button>
-                  <span class="blank"></span>
-                </div>
+                <template v-if="rtspMode === 'axis'">
+                  <div class="ptz-pad">
+                    <span class="blank"></span>
+                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,40,0)" @touchend="ptzStop" aria-label="Tilt up">▲</button>
+                    <span class="blank"></span>
+                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(-40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(-40,0,0)" @touchend="ptzStop" aria-label="Pan left">◀</button>
+                    <button type="button" class="btn-secondary ptz-stop" @click="ptzStop" aria-label="Stop">■</button>
+                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(40,0,0)" @touchend="ptzStop" aria-label="Pan right">▶</button>
+                    <span class="blank"></span>
+                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,-40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,-40,0)" @touchend="ptzStop" aria-label="Tilt down">▼</button>
+                    <span class="blank"></span>
+                  </div>
+                </template>
                 <div class="row">
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,-30)" @mouseup="ptzStop" @mouseleave="ptzStop">Zoom −</button>
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,30)" @mouseup="ptzStop" @mouseleave="ptzStop">Zoom +</button>
+                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,-30)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,0,-30)" @touchend="ptzStop">Zoom −</button>
+                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,30)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,0,30)" @touchend="ptzStop">Zoom +</button>
                 </div>
-                <div class="row row-actions">
+                <div class="row" v-if="rtspMode === 'custom'">
+                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzFocus(-1)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzFocus(-1)" @touchend="ptzStop">Focus −</button>
+                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzFocus(1)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzFocus(1)" @touchend="ptzStop">Focus +</button>
+                  <button type="button" class="btn btn-secondary" @click="ptzStop">Stop</button>
+                </div>
+                <p class="status-line hint" v-if="rtspMode === 'custom'">
+                  Hold Zoom / Focus to drive the lens; release to stop. Manual focus turns autofocus off (vendor API cannot turn AF back on).
+                </p>
+                <div class="row row-actions" v-if="rtspMode === 'axis'">
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/home',{})">Home preset</button>
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:true})">AF on</button>
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:false})">AF off</button>
@@ -333,8 +343,8 @@
               <p class="status-line hint">
                 This single URL is used for <strong>live preview</strong>, <strong>YouTube streaming</strong>, and <strong>disk recording</strong>.
                 Axis cameras use <code>/axis-media/media.amp?streamprofile=…</code>;
-                other brands need a custom path (Dahua / iCamra style is common).
-                Zoom / focus / PTZ still require Axis VAPIX — they will not work on non-Axis cameras.
+                other brands need a custom path (this MC800S5 uses <code>/stream0</code>).
+                Lens controls follow the mode: Axis VAPIX PTZ, or vendor zoom/focus via <code>/setPTZCmd</code>.
               </p>
               <div class="row rtsp-mode-row">
                 <label class="ck-row">
@@ -357,7 +367,7 @@
                 autocomplete="off"
               />
               <div class="row row-actions-spaced" v-if="rtspMode === 'custom'">
-                <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill Dahua / iCamra style</button>
+                <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill MC800S5 /stream0</button>
                 <button type="button" class="btn btn-secondary" @click="fillAxisRtsp">Fill Axis style</button>
               </div>
               <p class="status-line hint" v-if="rtspMode === 'axis'">
@@ -853,6 +863,9 @@
               };
             },
             computed: {
+              lensBadge: function () {
+                return this.rtspMode === "custom" ? "Zoom · Focus" : "PTZ · Axis";
+              },
               recPreviewLine: function () {
                 // Same math as scheduler.recording_preview() in
                 // app/scheduler.py; kept client-side too so the
@@ -1128,13 +1141,22 @@
                 }
                 this.api("GET", "/api/ptz/position")
                   .then(function (p) {
-                    self.ptzReadout =
-                      "pan=" + p.pan + " tilt=" + p.tilt + " zoom=" + p.zoom + " autofocus=" + (p.autofocus || "?");
+                    if (p.backend === "vendor") {
+                      self.ptzReadout =
+                        (p.note || "Vendor lens — no position feedback") +
+                        " · hold Zoom / Focus to move";
+                    } else {
+                      self.ptzReadout =
+                        "pan=" + p.pan + " tilt=" + p.tilt + " zoom=" + p.zoom +
+                        " autofocus=" + (p.autofocus || "?");
+                    }
                     self.ptzBackoffMs = 800;
-                    self.schedulePtz(800);
+                    self.schedulePtz(self.rtspMode === "custom" ? 5000 : 800);
                   })
                   .catch(function () {
-                    self.ptzReadout = "PTZ unavailable (camera offline)";
+                    self.ptzReadout = self.rtspMode === "custom"
+                      ? "Lens control unavailable (camera offline)"
+                      : "PTZ unavailable (camera offline)";
                     // Exponential backoff, capped at 30s.
                     self.ptzBackoffMs = Math.min(30000, Math.max(1000, self.ptzBackoffMs * 2));
                     self.schedulePtz(self.ptzBackoffMs);
@@ -1419,7 +1441,10 @@
                   .catch(function () {});
               },
               ptzMove: function (pan, tilt, zoom) {
-                this.api("POST", "/api/ptz/move", { pan: pan, tilt: tilt, zoom: zoom });
+                this.api("POST", "/api/ptz/move", { pan: pan, tilt: tilt, zoom: zoom, focus: 0 });
+              },
+              ptzFocus: function (dir) {
+                this.api("POST", "/api/ptz/move", { pan: 0, tilt: 0, zoom: 0, focus: dir });
               },
               ptzStop: function () {
                 this.api("POST", "/api/ptz/stop", {});
@@ -1730,7 +1755,7 @@
                 var host = String(this.camHost || "").trim();
                 var user = encodeURIComponent(String(this.camUser || ""));
                 var pass = encodeURIComponent(String(this.camPass || ""));
-                return "rtsp://" + user + ":" + pass + "@" + host + ":554/cam/realmonitor?channel=1&subtype=0";
+                return "rtsp://" + user + ":" + pass + "@" + host + ":554/stream0";
               },
               fillDahuaRtsp: function () {
                 this.rtspMode = "custom";

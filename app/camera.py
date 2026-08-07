@@ -39,13 +39,11 @@ def axis_rtsp_url(
 
 
 def dahua_style_rtsp_url(host: str, user: str, password: str, subtype: int = 0) -> str:
-    """Common Dahua / iCamra-compatible main/sub stream URL."""
+    """MC800S5 main/sub stream URL (``/stream0`` main, ``/stream1`` sub)."""
     u = quote(user or "", safe="")
     p = quote(password or "", safe="")
-    return (
-        f"rtsp://{u}:{p}@{host}:554/cam/realmonitor"
-        f"?channel=1&subtype={int(subtype)}"
-    )
+    path = "/stream1" if int(subtype) else "/stream0"
+    return f"rtsp://{u}:{p}@{host}:554{path}"
 
 
 def resolve_rtsp_url(cfg: Dict[str, Any], purpose: str) -> str:
@@ -87,7 +85,30 @@ def resolved_rtsp_urls(cfg: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
+def is_axis_mode(cfg: Dict[str, Any]) -> bool:
+    return str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom"
+
+
+def camera_control(cfg: Dict[str, Any]):
+    """
+    Return the lens/PTZ backend for the current config.
+
+    Axis mode → ``AxisCamera`` (VAPIX). Custom mode → ``VendorLensCamera``
+    (MC800S5_AF ``/setPTZCmd`` zoom/focus).
+    """
+    host = str(cfg.get("camera_host") or "").strip()
+    user = str(cfg.get("camera_user") or "")
+    password = str(cfg.get("camera_pass") or "")
+    if is_axis_mode(cfg):
+        return AxisCamera(host, user, password)
+    from vendor_lens import VendorLensCamera
+
+    return VendorLensCamera(host, user, password)
+
+
 class AxisCamera:
+    backend = "axis"
+
     def __init__(self, host: str, user: str, password: str, timeout: float = 10.0):
         self.base = f"http://{host}".rstrip("/")
         self.host = host
@@ -110,14 +131,21 @@ class AxisCamera:
     def ptz_position(self) -> Dict[str, Any]:
         r = self._get("/axis-cgi/com/ptz.cgi?query=position")
         r.raise_for_status()
-        out: Dict[str, Any] = {}
+        out: Dict[str, Any] = {"backend": self.backend}
         for line in r.text.strip().splitlines():
             if "=" in line:
                 k, v = line.split("=", 1)
                 out[k.strip()] = v.strip()
         return out
 
-    def ptz_continuous(self, pan: float = 0.0, tilt: float = 0.0, zoom: float = 0.0) -> None:
+    def ptz_continuous(
+        self,
+        pan: float = 0.0,
+        tilt: float = 0.0,
+        zoom: float = 0.0,
+        focus: float = 0.0,
+    ) -> None:
+        del focus  # Axis continuous focus not used; AF is toggled separately
         r = self._get(
             f"/axis-cgi/com/ptz.cgi?continuouspantiltmove={pan},{tilt}&continuouszoommove={zoom}"
         )

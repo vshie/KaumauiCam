@@ -26,6 +26,8 @@ from camera import (
     RTSP_PURPOSE_LIVE,
     RTSP_PURPOSE_RECORD,
     RTSP_PURPOSE_YOUTUBE,
+    camera_control,
+    is_axis_mode,
     resolve_rtsp_url,
     resolved_rtsp_urls,
 )
@@ -155,8 +157,14 @@ STREAM_STALL_SECS = 30.0
 
 
 def _camera() -> AxisCamera:
+    """Axis VAPIX client (profiles, snapshot). Prefer ``_lens()`` for PTZ."""
     c = cfgmod.load()
     return AxisCamera(c["camera_host"], c["camera_user"], c["camera_pass"])
+
+
+def _lens():
+    """Active zoom/focus/PTZ backend — Axis VAPIX or vendor ``/setPTZCmd``."""
+    return camera_control(cfgmod.load())
 
 
 def _youtube_session_age_secs() -> float:
@@ -275,7 +283,7 @@ def _apply_boot() -> None:
         return
     _boot_applied = True
     cfg = cfgmod.load()
-    axis_mode = str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom"
+    axis_mode = is_axis_mode(cfg)
     # VAPIX stream-profile provisioning only applies to Axis cameras.
     if axis_mode:
         try:
@@ -305,7 +313,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.3.9"
+_EXTENSION_VERSION = "0.4.0"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -778,7 +786,7 @@ def api_config():
 @app.route("/api/ptz/position", methods=["GET"])
 def ptz_position():
     try:
-        return jsonify(_camera().ptz_position())
+        return jsonify(_lens().ptz_position())
     except Exception as e:
         # Camera offline is a normal operating state for this extension; return 503 and
         # skip the stack trace so we don't fill the log on every poll.
@@ -791,8 +799,9 @@ def ptz_move():
     pan = float(j.get("pan", 0))
     tilt = float(j.get("tilt", 0))
     zoom = float(j.get("zoom", 0))
+    focus = float(j.get("focus", 0))
     try:
-        _camera().ptz_continuous(pan, tilt, zoom)
+        _lens().ptz_continuous(pan, tilt, zoom, focus=focus)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -801,7 +810,7 @@ def ptz_move():
 @app.route("/api/ptz/stop", methods=["POST"])
 def ptz_stop():
     try:
-        _camera().ptz_stop()
+        _lens().ptz_stop()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -810,7 +819,7 @@ def ptz_stop():
 @app.route("/api/ptz/home", methods=["POST"])
 def ptz_home():
     try:
-        _camera().ptz_goto_preset("Home")
+        _lens().ptz_goto_preset("Home")
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -821,7 +830,7 @@ def ptz_autofocus():
     j = request.get_json(force=True, silent=True) or {}
     on = bool(j.get("on", True))
     try:
-        _camera().autofocus(on)
+        _lens().autofocus(on)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -853,7 +862,7 @@ def stream_start():
     with _state_lock:
         _youtube_force = True
     try:
-        if str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom":
+        if is_axis_mode(cfg):
             _camera().ensure_youtubelive_profile()
     except Exception as e:
         logger.warning("ensure youtubelive on stream/start: %s", e)
@@ -1199,7 +1208,7 @@ def solar_poke():
 def ensure_livepreview():
     try:
         cfg = cfgmod.load()
-        if str(cfg.get("rtsp_mode") or "axis").strip().lower() == "custom":
+        if not is_axis_mode(cfg):
             return jsonify({
                 "ok": False,
                 "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
@@ -1214,7 +1223,7 @@ def ensure_livepreview():
 @app.route("/api/camera/ensure-fishpond", methods=["POST"])
 def ensure_fishpond():
     try:
-        if str(cfgmod.load().get("rtsp_mode") or "axis").strip().lower() == "custom":
+        if not is_axis_mode(cfgmod.load()):
             return jsonify({
                 "ok": False,
                 "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
@@ -1228,7 +1237,7 @@ def ensure_fishpond():
 @app.route("/api/camera/ensure-youtubelive", methods=["POST"])
 def ensure_youtubelive():
     try:
-        if str(cfgmod.load().get("rtsp_mode") or "axis").strip().lower() == "custom":
+        if not is_axis_mode(cfgmod.load()):
             return jsonify({
                 "ok": False,
                 "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
