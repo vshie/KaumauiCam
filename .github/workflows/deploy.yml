@@ -19,7 +19,9 @@ jobs:
           docker-password: ${{ secrets.DOCKER_PASSWORD }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           image-name: "wailoa_cam"
-          build-platforms: "linux/amd64,linux/arm64/v8,linux/arm/v7"
+          # Local BlueOS host for this branch is amd64 only; skip arm
+          # cross-builds (cryptography/cffi fails under QEMU arm/v7).
+          build-platforms: "linux/amd64"
           author: ${{ vars.MY_NAME }}
           author-email: ${{ vars.MY_EMAIL }}
           maintainer: ${{ vars.ORG_NAME }}
