@@ -106,7 +106,7 @@
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Uses dedicated <code>youtubelive</code> camera profile (H.264 1080p30, MBR 4.5 Mbps), stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
+              <p class="status-line">Uses the RTSP URL from Settings (Custom mode: the URL you entered; Axis mode: the <code>youtubelive</code> stream profile). Stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
 
               <h2 class="h2-spaced">
                 YouTube account (API mode)
@@ -331,9 +331,10 @@
               </div>
               <h2 class="h2-spaced">RTSP URL</h2>
               <p class="status-line hint">
-                Live preview, YouTube, and recording all pull from the RTSP URL below.
+                This single URL is used for <strong>live preview</strong>, <strong>YouTube streaming</strong>, and <strong>disk recording</strong>.
                 Axis cameras use <code>/axis-media/media.amp?streamprofile=…</code>;
-                other brands need a custom path (Dahua / iCamra style is a common example).
+                other brands need a custom path (Dahua / iCamra style is common).
+                Zoom / focus / PTZ still require Axis VAPIX — they will not work on non-Axis cameras.
               </p>
               <div class="row rtsp-mode-row">
                 <label class="ck-row">
@@ -345,7 +346,7 @@
                   Custom URL
                 </label>
               </div>
-              <label>Live preview RTSP URL</label>
+              <label>RTSP URL</label>
               <input
                 type="text"
                 class="rtsp-url-input"
@@ -355,33 +356,14 @@
                 spellcheck="false"
                 autocomplete="off"
               />
-              <template v-if="rtspMode === 'custom'">
-                <label>YouTube RTSP URL <span class="hint">(optional — blank uses live preview)</span></label>
-                <input
-                  type="text"
-                  class="rtsp-url-input"
-                  v-model="rtspUrlYoutube"
-                  placeholder="same as live preview"
-                  spellcheck="false"
-                  autocomplete="off"
-                />
-                <label>Recording RTSP URL <span class="hint">(optional — blank uses live preview)</span></label>
-                <input
-                  type="text"
-                  class="rtsp-url-input"
-                  v-model="rtspUrlRecord"
-                  placeholder="same as live preview"
-                  spellcheck="false"
-                  autocomplete="off"
-                />
-                <div class="row row-actions-spaced">
-                  <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill Dahua / iCamra style</button>
-                  <button type="button" class="btn btn-secondary" @click="fillAxisRtsp">Fill Axis style</button>
-                </div>
-              </template>
+              <div class="row row-actions-spaced" v-if="rtspMode === 'custom'">
+                <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill Dahua / iCamra style</button>
+                <button type="button" class="btn btn-secondary" @click="fillAxisRtsp">Fill Axis style</button>
+              </div>
               <p class="status-line hint" v-if="rtspMode === 'axis'">
-                Built from host / user / password + the <code>livepreview</code> stream profile.
-                Switch to Custom to edit freely.
+                Built from host / user / password + Axis stream profiles
+                (<code>livepreview</code> / <code>youtubelive</code> / recordings profile).
+                Switch to Custom to paste one URL for all uses.
               </p>
               <h2 class="h2-spaced">Quota</h2>
               <label>Monthly quota (GB, 0 = no bar cap)</label>
@@ -1721,9 +1703,11 @@
                   bandwidth_overhead_pct: parseFloat(this.overheadPct) || 0,
                 };
                 if (payload.rtsp_mode === "custom") {
-                  payload.rtsp_url_live = String(this.rtspUrlLive || "").trim();
-                  payload.rtsp_url_youtube = String(this.rtspUrlYoutube || "").trim();
-                  payload.rtsp_url_record = String(this.rtspUrlRecord || "").trim();
+                  var url = String(this.rtspUrlLive || "").trim();
+                  payload.rtsp_url_live = url;
+                  // One URL drives preview, YouTube, and recording.
+                  payload.rtsp_url_youtube = url;
+                  payload.rtsp_url_record = url;
                 }
                 this.api("POST", "/api/config", payload).then(function (c) {
                   alert("Saved. Reload page if camera IP changed.");
