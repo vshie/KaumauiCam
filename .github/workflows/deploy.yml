@@ -1,28 +1,69 @@
 name: Deploy BlueOS Extension Image
 
+# wailoacam targets the local amd64 BlueOS host only.
+# Do not use BlueOS-community/Deploy-BlueOS-Extension here — that action
+# always builds hardcoded arm64/armv7 artifact tarballs after the main
+# push, which fails once native deps (e.g. cryptography/cffi) enter the
+# image.
+
 on:
   push:
 
 jobs:
   deploy-docker-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Clear Docker cache
-        run: |
-          docker builder prune -f
-          docker buildx prune -f
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Deploy BlueOS Extension
-        uses: BlueOS-community/Deploy-BlueOS-Extension@v1.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
         with:
-          docker-username: ${{ secrets.DOCKER_USERNAME }}
-          docker-password: ${{ secrets.DOCKER_PASSWORD }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          image-name: "wailoa_cam"
-          # Local BlueOS host for this branch is amd64 only; skip arm
-          # cross-builds (cryptography/cffi fails under QEMU arm/v7).
-          build-platforms: "linux/amd64"
-          author: ${{ vars.MY_NAME }}
-          author-email: ${{ vars.MY_EMAIL }}
-          maintainer: ${{ vars.ORG_NAME }}
-          maintainer-email: ${{ vars.ORG_EMAIL }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Image tags
+        id: meta
+        run: |
+          DOCKER_IMAGE="${{ secrets.DOCKER_USERNAME }}/blueos-wailoa_cam"
+          VERSION="${GITHUB_REF##*/}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          TAGS="${DOCKER_IMAGE}:${VERSION}"
+          if [[ "$VERSION" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            TAGS="${TAGS},${DOCKER_IMAGE}:latest"
+          fi
+          echo "docker_image=${DOCKER_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push linux/amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            IMAGE_NAME=wailoa_cam
+            AUTHOR=${{ vars.MY_NAME }}
+            AUTHOR_EMAIL=${{ vars.MY_EMAIL }}
+            MAINTAINER=${{ vars.ORG_NAME }}
+            MAINTAINER_EMAIL=${{ vars.ORG_EMAIL }}
+            REPO=${{ github.repository }}
+            OWNER=${{ github.repository_owner }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect \
+            "${{ steps.meta.outputs.docker_image }}:${{ steps.meta.outputs.version }}"

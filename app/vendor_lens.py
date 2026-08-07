@@ -9,31 +9,13 @@ re-enable autofocus via this API (manual focus cmds use ``*AutoOff``).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
-from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
-from cryptography.hazmat.primitives.ciphers import Cipher, modes
+
+from des_ecb import des_hex
 
 logger = logging.getLogger(__name__)
-
-_DES_KEY = b"WebLogin"
-
-
-def des_hex(text: str) -> str:
-    """DES-ECB encrypt ``text`` under ``WebLogin``, zero-pad, return hex.
-
-    An 8-byte TripleDES key is treated as single-DES (matches the stock
-    UI's ``des.js``). Factory ``admin`` / ``123456`` →
-    ``52851dbd7918bbae`` / ``a17faccd02661e4c``.
-    """
-    data = text.encode()
-    data += b"\x00" * (-len(data) % 8)
-    enc = Cipher(TripleDES(_DES_KEY), modes.ECB()).encryptor()
-    return (enc.update(data) + enc.finalize()).hex()
-
-
-class VendorLensCamera:
     """Zoom / focus only — no pan/tilt head on the MC800S5_AF."""
 
     backend = "vendor"
