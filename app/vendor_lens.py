@@ -16,6 +16,9 @@ import requests
 from des_ecb import des_hex
 
 logger = logging.getLogger(__name__)
+
+
+class VendorLensCamera:
     """Zoom / focus only — no pan/tilt head on the MC800S5_AF."""
 
     backend = "vendor"
