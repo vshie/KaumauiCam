@@ -24,7 +24,8 @@ class AxisCamera:
 
     def _get(self, path: str, **kwargs) -> requests.Response:
         url = f"{self.base}{path}"
-        return requests.get(url, auth=self.auth, timeout=self.timeout, **kwargs)
+        kwargs.setdefault("timeout", self.timeout)
+        return requests.get(url, auth=self.auth, **kwargs)
 
     def _post(self, path: str, **kwargs) -> requests.Response:
         url = f"{self.base}{path}"
@@ -81,6 +82,23 @@ class AxisCamera:
         r = self._get("/axis-cgi/jpg/image.cgi?resolution=1280x720")
         r.raise_for_status()
         return r.content
+
+    def pulse_output(self, port: int = 1, duration_ms: int = 1500) -> None:
+        """Pulse a VAPIX I/O output (relay) for ``duration_ms``.
+
+        ``port.cgi`` numbers ports from 1 (``IOPort.I0`` is port 1).
+        ``action=1:/1500\\`` activates port 1 for 1500 ms then deactivates.
+        The camera holds the HTTP request until the pulse finishes.
+        """
+        port_n = int(port)
+        if port_n < 1:
+            raise ValueError("I/O port numbers start at 1")
+        ms = max(1, int(duration_ms))
+        # ``/`` = active, ``\\`` = inactive, delay is milliseconds.
+        action = f"{port_n}:/{ms}\\"
+        timeout = max(self.timeout, (ms / 1000.0) + 5.0)
+        r = self._get("/axis-cgi/io/port.cgi", params={"action": action}, timeout=timeout)
+        r.raise_for_status()
 
     def param_list(self, group: str) -> Dict[str, str]:
         r = self._get(f"/axis-cgi/param.cgi?action=list&group={group}")
