@@ -1,26 +1,68 @@
 name: Deploy BlueOS Extension Image
 
+# This boat's BlueOS host is linux/amd64. Do not use
+# BlueOS-community/Deploy-BlueOS-Extension — it always QEMU-cross-builds
+# arm64/armv7 after the main push, and QEMU routinely segfaults in
+# libc-bin's postinst (dpkg 139 / apt 100).
+
 on:
   push:
 
 jobs:
   deploy-docker-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
-      - name: Clear Docker cache
-        run: |
-          docker builder prune -f
-          docker buildx prune -f
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Deploy BlueOS Extension
-        uses: BlueOS-community/Deploy-BlueOS-Extension@v1.2.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
         with:
-          docker-username: ${{ secrets.DOCKER_USERNAME }}
-          docker-password: ${{ secrets.DOCKER_PASSWORD }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          image-name: "kaumaui_cam"
-          build-platforms: "linux/amd64,linux/arm64/v8,linux/arm/v7"
-          author: ${{ vars.MY_NAME }}
-          author-email: ${{ vars.MY_EMAIL }}
-          maintainer: ${{ vars.ORG_NAME }}
-          maintainer-email: ${{ vars.ORG_EMAIL }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Image tags
+        id: meta
+        run: |
+          DOCKER_IMAGE="${{ secrets.DOCKER_USERNAME }}/blueos-kaumaui_cam"
+          VERSION="${GITHUB_REF##*/}"
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          TAGS="${DOCKER_IMAGE}:${VERSION}"
+          if [[ "$VERSION" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            TAGS="${TAGS},${DOCKER_IMAGE}:latest"
+          fi
+          echo "docker_image=${DOCKER_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push linux/amd64
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            IMAGE_NAME=kaumaui_cam
+            AUTHOR=${{ vars.MY_NAME }}
+            AUTHOR_EMAIL=${{ vars.MY_EMAIL }}
+            MAINTAINER=${{ vars.ORG_NAME }}
+            MAINTAINER_EMAIL=${{ vars.ORG_EMAIL }}
+            REPO=${{ github.repository }}
+            OWNER=${{ github.repository_owner }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect image
+        run: |
+          docker buildx imagetools inspect \
+            "${{ steps.meta.outputs.docker_image }}:${{ steps.meta.outputs.version }}"

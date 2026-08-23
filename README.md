@@ -10,13 +10,13 @@ Layout and GitHub Action follow [BlueOS_videorecorder / dropcam](https://github.
 
 Repository secrets:
 
-- `DOCKER_USERNAME` / `DOCKER_PASSWORD` — Docker Hub (or registry) credentials used by `Deploy-BlueOS-Extension`.
+- `DOCKER_USERNAME` / `DOCKER_PASSWORD` — Docker Hub (or registry) credentials used by the deploy workflow.
 
 Repository variables (example names from workflow):
 
 - `MY_NAME`, `MY_EMAIL`, `ORG_NAME`, `ORG_EMAIL`
 
-On **push**, the workflow builds **linux/amd64**, **linux/arm64**, and **linux/arm/v7** and publishes the extension image.
+On **push**, the workflow builds **linux/amd64** only and publishes `vshie/blueos-kaumaui_cam`. Arm64/armv7 QEMU cross-builds are skipped — they crash in `libc-bin` postinst on GitHub runners.
 
 ## Manual installation (BlueOS Extensions Manager)
 
