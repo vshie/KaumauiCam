@@ -105,10 +105,12 @@
                   Hold Zoom / Focus to drive the lens; release to stop. Manual focus turns autofocus off (vendor API cannot turn AF back on).
                 </p>
                 <div class="row row-actions" v-if="rtspMode === 'axis'">
+                  <button type="button" class="btn" :disabled="wiperBusy" @click="jogWiper">{{ wiperBusy ? 'Wiping…' : 'Jog wiper' }}</button>
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/home',{})">Home preset</button>
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:true})">AF on</button>
                   <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:false})">AF off</button>
                 </div>
+                <p class="status-line hint" v-if="rtspMode === 'axis' && wiperStatus">{{ wiperStatus }}</p>
               </div>
             </div>
           </section>
@@ -860,6 +862,8 @@
                 pc: null,
                 ptzBackoffMs: 800,
                 ptzTimer: null,
+                wiperBusy: false,
+                wiperStatus: "",
               };
             },
             computed: {
@@ -1448,6 +1452,22 @@
               },
               ptzStop: function () {
                 this.api("POST", "/api/ptz/stop", {});
+              },
+              jogWiper: function () {
+                var self = this;
+                if (this.wiperBusy) return;
+                this.wiperBusy = true;
+                this.wiperStatus = "Pulsing relay 1 for 1.5s…";
+                this.api("POST", "/api/camera/wiper", {})
+                  .then(function () {
+                    self.wiperStatus = "Wiper jog complete.";
+                  })
+                  .catch(function (e) {
+                    self.wiperStatus = "Wiper failed: " + (e && e.message ? e.message : e);
+                  })
+                  .then(function () {
+                    self.wiperBusy = false;
+                  });
               },
               startWebRTC: function () {
                 var self = this;

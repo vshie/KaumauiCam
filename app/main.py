@@ -313,7 +313,12 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.0"
+_EXTENSION_VERSION = "0.5.0"
+
+# Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
+WIPER_PORT = 1
+WIPER_DURATION_MS = 1500
+_wiper_lock = threading.Lock()
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -1202,6 +1207,30 @@ def solar_poke():
     within ~1s rather than up to ``solar_interval_secs``."""
     solar.poke()
     return jsonify({"ok": True})
+
+
+@app.route("/api/camera/wiper", methods=["POST"])
+def camera_wiper():
+    """Jog the washer/wiper: pulse Axis relay 1 for 1.5 seconds."""
+    if not _wiper_lock.acquire(blocking=False):
+        return jsonify({"ok": False, "error": "Wiper already running"}), 409
+    try:
+        if not is_axis_mode(cfgmod.load()):
+            return jsonify({
+                "ok": False,
+                "error": "Wiper control is only available in Axis mode",
+            }), 400
+        _camera().pulse_output(port=WIPER_PORT, duration_ms=WIPER_DURATION_MS)
+        return jsonify({
+            "ok": True,
+            "port": WIPER_PORT,
+            "duration_ms": WIPER_DURATION_MS,
+        })
+    except Exception as e:
+        logger.warning("wiper pulse failed: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+    finally:
+        _wiper_lock.release()
 
 
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
