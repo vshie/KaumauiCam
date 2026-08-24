@@ -1,9 +1,9 @@
 name: Deploy BlueOS Extension Image
 
-# This boat's BlueOS host is linux/amd64. Do not use
+# The boat BlueOS host is linux/arm/v7 (Raspberry Pi). Do not use
 # BlueOS-community/Deploy-BlueOS-Extension — it always QEMU-cross-builds
-# arm64/armv7 after the main push, and QEMU routinely segfaults in
-# libc-bin's postinst (dpkg 139 / apt 100).
+# linux/arm64 as well, and QEMU routinely segfaults in libc-bin's
+# postinst (dpkg 139 / apt 100). We publish amd64 + arm/v7 only.
 
 on:
   push:
@@ -17,6 +17,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -43,12 +48,12 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push linux/amd64
+      - name: Build and push linux/amd64 + linux/arm/v7
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm/v7
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
