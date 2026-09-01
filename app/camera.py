@@ -1,14 +1,10 @@
-"""Axis VAPIX HTTP digest client for PTZ, snapshots, and stream profiles.
-
-Also owns RTSP URL resolution for Axis-built and free-form custom URLs
-(see ``resolve_rtsp_url``).
-"""
+"""Axis VAPIX HTTP digest client for snapshots and stream profiles."""
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -16,99 +12,8 @@ from requests.auth import HTTPDigestAuth
 
 logger = logging.getLogger(__name__)
 
-# Purpose keys passed to resolve_rtsp_url / exposed on GET /api/config.
-RTSP_PURPOSE_LIVE = "livepreview"
-RTSP_PURPOSE_YOUTUBE = "youtubelive"
-RTSP_PURPOSE_RECORD = "record"
-
-_CUSTOM_URL_KEYS = {
-    RTSP_PURPOSE_LIVE: "rtsp_url_live",
-    RTSP_PURPOSE_YOUTUBE: "rtsp_url_youtube",
-    RTSP_PURPOSE_RECORD: "rtsp_url_record",
-}
-
-
-def axis_rtsp_url(
-    host: str, user: str, password: str, streamprofile: Optional[str] = None
-) -> str:
-    """Build the Axis VAPIX RTSP URL for an optional stream profile name."""
-    u = quote(user or "", safe="")
-    p = quote(password or "", safe="")
-    q = f"?streamprofile={streamprofile}" if streamprofile else ""
-    return f"rtsp://{u}:{p}@{host}:554/axis-media/media.amp{q}"
-
-
-def dahua_style_rtsp_url(host: str, user: str, password: str, subtype: int = 0) -> str:
-    """MC800S5 main/sub stream URL (``/stream0`` main, ``/stream1`` sub)."""
-    u = quote(user or "", safe="")
-    p = quote(password or "", safe="")
-    path = "/stream1" if int(subtype) else "/stream0"
-    return f"rtsp://{u}:{p}@{host}:554{path}"
-
-
-def resolve_rtsp_url(cfg: Dict[str, Any], purpose: str) -> str:
-    """
-    Resolve the RTSP URL for live preview, YouTube, or recording.
-
-    In ``custom`` mode, returns the matching ``rtsp_url_*`` field. YouTube
-    and record fall back to ``rtsp_url_live`` when their own field is
-    empty. If still empty (or mode is ``axis``), builds the Axis URL from
-    host/user/pass + the appropriate stream profile name.
-    """
-    mode = str(cfg.get("rtsp_mode") or "axis").strip().lower()
-    if mode == "custom":
-        key = _CUSTOM_URL_KEYS.get(purpose, "rtsp_url_live")
-        url = str(cfg.get(key) or "").strip()
-        if not url and purpose != RTSP_PURPOSE_LIVE:
-            url = str(cfg.get("rtsp_url_live") or "").strip()
-        if url:
-            return url
-
-    host = str(cfg.get("camera_host") or "").strip()
-    user = str(cfg.get("camera_user") or "")
-    password = str(cfg.get("camera_pass") or "")
-    if purpose == RTSP_PURPOSE_YOUTUBE:
-        profile: Optional[str] = "youtubelive"
-    elif purpose == RTSP_PURPOSE_RECORD:
-        profile = str(cfg.get("recordings_profile") or "DefaultFishPond").strip() or None
-    else:
-        profile = "livepreview"
-    return axis_rtsp_url(host, user, password, profile)
-
-
-def resolved_rtsp_urls(cfg: Dict[str, Any]) -> Dict[str, str]:
-    """Map of purpose → URL currently in effect (for Settings UI display)."""
-    return {
-        RTSP_PURPOSE_LIVE: resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE),
-        RTSP_PURPOSE_YOUTUBE: resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE),
-        RTSP_PURPOSE_RECORD: resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD),
-    }
-
-
-def is_axis_mode(cfg: Dict[str, Any]) -> bool:
-    return str(cfg.get("rtsp_mode") or "axis").strip().lower() != "custom"
-
-
-def camera_control(cfg: Dict[str, Any]):
-    """
-    Return the lens/PTZ backend for the current config.
-
-    Axis mode → ``AxisCamera`` (VAPIX). Custom mode → ``VendorLensCamera``
-    (MC800S5_AF ``/setPTZCmd`` zoom/focus).
-    """
-    host = str(cfg.get("camera_host") or "").strip()
-    user = str(cfg.get("camera_user") or "")
-    password = str(cfg.get("camera_pass") or "")
-    if is_axis_mode(cfg):
-        return AxisCamera(host, user, password)
-    from vendor_lens import VendorLensCamera
-
-    return VendorLensCamera(host, user, password)
-
 
 class AxisCamera:
-    backend = "axis"
-
     def __init__(self, host: str, user: str, password: str, timeout: float = 10.0):
         self.base = f"http://{host}".rstrip("/")
         self.host = host
@@ -126,55 +31,10 @@ class AxisCamera:
         return requests.post(url, auth=self.auth, timeout=self.timeout, **kwargs)
 
     def rtsp_url(self, streamprofile: Optional[str] = None) -> str:
-        return axis_rtsp_url(self.host, self.user, self.password, streamprofile)
-
-    def ptz_position(self) -> Dict[str, Any]:
-        r = self._get("/axis-cgi/com/ptz.cgi?query=position")
-        r.raise_for_status()
-        out: Dict[str, Any] = {"backend": self.backend}
-        for line in r.text.strip().splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip()
-        return out
-
-    def ptz_continuous(
-        self,
-        pan: float = 0.0,
-        tilt: float = 0.0,
-        zoom: float = 0.0,
-        focus: float = 0.0,
-    ) -> None:
-        del focus  # Axis continuous focus not used; AF is toggled separately
-        r = self._get(
-            f"/axis-cgi/com/ptz.cgi?continuouspantiltmove={pan},{tilt}&continuouszoommove={zoom}"
-        )
-        r.raise_for_status()
-
-    def ptz_stop(self) -> None:
-        r = self._get("/axis-cgi/com/ptz.cgi?continuouspantiltmove=0,0&continuouszoommove=0")
-        r.raise_for_status()
-
-    def ptz_absolute(self, pan: Optional[float] = None, tilt: Optional[float] = None, zoom: Optional[int] = None) -> None:
-        parts = []
-        if pan is not None:
-            parts.append(f"pan={pan}")
-        if tilt is not None:
-            parts.append(f"tilt={tilt}")
-        if zoom is not None:
-            parts.append(f"zoom={zoom}")
-        if not parts:
-            return
-        r = self._get("/axis-cgi/com/ptz.cgi?" + "&".join(parts))
-        r.raise_for_status()
-
-    def ptz_goto_preset(self, name: str) -> None:
-        r = self._get("/axis-cgi/com/ptz.cgi", params={"gotoserverpresetname": name})
-        r.raise_for_status()
-
-    def autofocus(self, on: bool = True) -> None:
-        r = self._get(f"/axis-cgi/com/ptz.cgi?autofocus={'on' if on else 'off'}")
-        r.raise_for_status()
+        u = quote(self.user, safe="")
+        p = quote(self.password, safe="")
+        q = f"?streamprofile={streamprofile}" if streamprofile else ""
+        return f"rtsp://{u}:{p}@{self.host}:554/axis-media/media.amp{q}"
 
     def snapshot_jpeg(self) -> bytes:
         r = self._get("/axis-cgi/jpg/image.cgi?resolution=1280x720")

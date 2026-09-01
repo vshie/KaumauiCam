@@ -21,16 +21,7 @@ import link_uptime
 import solar
 import youtube_api
 import youtube_monitor
-from camera import (
-    AxisCamera,
-    RTSP_PURPOSE_LIVE,
-    RTSP_PURPOSE_RECORD,
-    RTSP_PURPOSE_YOUTUBE,
-    camera_control,
-    is_axis_mode,
-    resolve_rtsp_url,
-    resolved_rtsp_urls,
-)
+from camera import AxisCamera
 from go2rtc_svc import Go2RtcSupervisor, render_config
 from recorder import MIN_SEGMENT_BYTES, Recorder
 from scheduler import (
@@ -63,6 +54,7 @@ RECORDER_TAIL_GUARD_SECS = 30
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
+MCM_URL = os.environ.get("MCM_URL", "http://127.0.0.1:6020")
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
@@ -157,14 +149,8 @@ STREAM_STALL_SECS = 30.0
 
 
 def _camera() -> AxisCamera:
-    """Axis VAPIX client (profiles, snapshot). Prefer ``_lens()`` for PTZ."""
     c = cfgmod.load()
     return AxisCamera(c["camera_host"], c["camera_user"], c["camera_pass"])
-
-
-def _lens():
-    """Active zoom/focus/PTZ backend — Axis VAPIX or vendor ``/setPTZCmd``."""
-    return camera_control(cfgmod.load())
 
 
 def _youtube_session_age_secs() -> float:
@@ -282,25 +268,19 @@ def _apply_boot() -> None:
     if _boot_applied:
         return
     _boot_applied = True
-    cfg = cfgmod.load()
-    axis_mode = is_axis_mode(cfg)
-    # VAPIX stream-profile provisioning only applies to Axis cameras.
-    if axis_mode:
-        try:
-            cam = _camera()
-            cam.ensure_defaultfishpond_profile()
-        except Exception as e:
-            logger.warning("boot fishpond profile: %s", e)
-        try:
-            cam = _camera()
-            ok, msg = cam.ensure_youtubelive_profile()
-            logger.info("boot youtubelive profile: %s (%s)", msg, ok)
-        except Exception as e:
-            logger.warning("boot youtubelive profile: %s", e)
-    else:
-        logger.info("boot: rtsp_mode=custom — skipping Axis VAPIX profile provisioning")
     try:
-        rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE)
+        cam = _camera()
+        cam.ensure_defaultfishpond_profile()
+    except Exception as e:
+        logger.warning("boot fishpond profile: %s", e)
+    try:
+        cam = _camera()
+        ok, msg = cam.ensure_youtubelive_profile()
+        logger.info("boot youtubelive profile: %s (%s)", msg, ok)
+    except Exception as e:
+        logger.warning("boot youtubelive profile: %s", e)
+    try:
+        rtsp = _camera().rtsp_url("livepreview")
         logger.info("boot livepreview RTSP: %s", _redact_rtsp(rtsp))
         render_config(rtsp)
         go2rtc_sup.start()
@@ -313,7 +293,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.0"
+_EXTENSION_VERSION = "0.4.1"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -396,7 +376,8 @@ def _scheduler_loop() -> None:
                     key = (cfg.get("youtube_stream_key") or "").strip()
             if want_yt and key:
                 if not youtube_streamer.is_running():
-                    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE)
+                    cam = _camera()
+                    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
                     if youtube_streamer.start(rtsp, key):
                         now_ts = time.time()
                         with _state_lock:
@@ -659,7 +640,9 @@ def _scheduler_loop() -> None:
                         time.sleep(5)
                         continue
                     _recording_error = None
-                    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD)
+                    cam = _camera()
+                    prof = cfg.get("recordings_profile", "DefaultFishPond")
+                    rtsp = cam.rtsp_url(prof)
                     if not recorder.start(rtsp, dest):
                         _recording_error = "Recorder failed to start"
             else:
@@ -681,7 +664,7 @@ def register_service():
     return jsonify(
         {
             "name": "Wailoa Cam",
-            "description": "Axis live view, PTZ, YouTube Live scheduling, and local recordings.",
+            "description": "Axis live view, YouTube Live scheduling, and local recordings.",
             "icon": "mdi-fish",
             "company": "Blue Robotics",
             "version": _EXTENSION_VERSION,
@@ -742,28 +725,71 @@ def health():
     return jsonify({"ok": True, "service": "wailoa-cam"})
 
 
+@app.route("/api/mcm/streams", methods=["GET"])
+def api_mcm_streams():
+    """BlueOS camera-manager streams for MCM WebRTC live preview.
+
+    Same shape as DropCam ``GET /streams``: ``stream_id``, ``name``,
+    ``rtsp_url``, ``encode``, ``running`` — enough for ``mcm_webrtc_live.js``
+    to match a signalling producer on ``ws://<host>:6021``.
+    """
+    try:
+        r = requests.get(f"{MCM_URL}/streams", timeout=8)
+        r.raise_for_status()
+        raw = r.json()
+    except Exception as e:
+        logger.warning("MCM /streams: %s", e)
+        return jsonify({"ok": False, "error": str(e), "streams": []}), 502
+
+    out = []
+    for s in raw or []:
+        try:
+            sid = s.get("id")
+            vas = s.get("video_and_stream") or {}
+            name = vas.get("name") or "stream"
+            info = vas.get("stream_information") or {}
+            cfg = info.get("configuration") or {}
+            if cfg.get("type") != "video":
+                continue
+            endpoints = [ep for ep in (info.get("endpoints") or []) if isinstance(ep, str)]
+            rtsp = None
+            for ep in endpoints:
+                if ep.lower().startswith("rtsp://"):
+                    rtsp = re.sub(
+                        r"^(rtsp://)([^/:]+)(:\d+)?",
+                        r"\g<1>127.0.0.1\3",
+                        ep,
+                        count=1,
+                        flags=re.I,
+                    )
+                    break
+            # UDP-only streams still publish a WebRTC producer; keep them.
+            if not sid:
+                continue
+            out.append(
+                {
+                    "stream_id": str(sid),
+                    "name": name,
+                    "rtsp_url": rtsp or (endpoints[0] if endpoints else ""),
+                    "encode": (cfg.get("encode") or "").upper(),
+                    "running": bool(s.get("running")),
+                }
+            )
+        except Exception as parse_err:
+            logger.debug("MCM stream skip: %s", parse_err)
+            continue
+    return jsonify({"ok": True, "streams": out})
+
+
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        cfg = cfgmod.load()
-        out = dict(cfg)
-        out["rtsp_resolved"] = resolved_rtsp_urls(cfg)
-        return jsonify(out)
+        return jsonify(cfgmod.load())
     data = request.get_json(force=True, silent=True) or {}
     out = cfgmod.update(data)
-    rtsp_keys = (
-        "camera_host",
-        "camera_user",
-        "camera_pass",
-        "rtsp_mode",
-        "rtsp_url_live",
-        "rtsp_url_youtube",
-        "rtsp_url_record",
-        "recordings_profile",
-    )
-    if any(k in data for k in rtsp_keys):
+    if any(k in data for k in ("camera_host", "camera_user", "camera_pass")):
         try:
-            rtsp = resolve_rtsp_url(out, RTSP_PURPOSE_LIVE)
+            rtsp = _camera().rtsp_url("livepreview")
             logger.info("go2rtc reload RTSP: %s", _redact_rtsp(rtsp))
             render_config(rtsp)
             go2rtc_sup.stop()
@@ -778,62 +804,7 @@ def api_config():
             youtube_monitor.poke()
         except Exception:
             logger.exception("youtube_monitor.poke after config save failed")
-    out_resp = dict(out)
-    out_resp["rtsp_resolved"] = resolved_rtsp_urls(out)
-    return jsonify(out_resp)
-
-
-@app.route("/api/ptz/position", methods=["GET"])
-def ptz_position():
-    try:
-        return jsonify(_lens().ptz_position())
-    except Exception as e:
-        # Camera offline is a normal operating state for this extension; return 503 and
-        # skip the stack trace so we don't fill the log on every poll.
-        return jsonify({"error": str(e), "offline": True}), 503
-
-
-@app.route("/api/ptz/move", methods=["POST"])
-def ptz_move():
-    j = request.get_json(force=True, silent=True) or {}
-    pan = float(j.get("pan", 0))
-    tilt = float(j.get("tilt", 0))
-    zoom = float(j.get("zoom", 0))
-    focus = float(j.get("focus", 0))
-    try:
-        _lens().ptz_continuous(pan, tilt, zoom, focus=focus)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/ptz/stop", methods=["POST"])
-def ptz_stop():
-    try:
-        _lens().ptz_stop()
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/ptz/home", methods=["POST"])
-def ptz_home():
-    try:
-        _lens().ptz_goto_preset("Home")
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/ptz/autofocus", methods=["POST"])
-def ptz_autofocus():
-    j = request.get_json(force=True, silent=True) or {}
-    on = bool(j.get("on", True))
-    try:
-        _lens().autofocus(on)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify(out)
 
 
 @app.route("/api/stream/start", methods=["POST"])
@@ -861,12 +832,12 @@ def stream_start():
             return jsonify({"error": "youtube_stream_key empty"}), 400
     with _state_lock:
         _youtube_force = True
+    cam = _camera()
     try:
-        if is_axis_mode(cfg):
-            _camera().ensure_youtubelive_profile()
+        cam.ensure_youtubelive_profile()
     except Exception as e:
         logger.warning("ensure youtubelive on stream/start: %s", e)
-    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_YOUTUBE)
+    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
     if youtube_streamer.start(rtsp, key):
         now_ts = time.time()
         with _state_lock:
@@ -1207,14 +1178,9 @@ def solar_poke():
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
 def ensure_livepreview():
     try:
-        cfg = cfgmod.load()
-        if not is_axis_mode(cfg):
-            return jsonify({
-                "ok": False,
-                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
-            }), 400
-        ok, msg = _camera().ensure_livepreview_profile()
-        render_config(resolve_rtsp_url(cfg, RTSP_PURPOSE_LIVE))
+        cam = _camera()
+        ok, msg = cam.ensure_livepreview_profile()
+        render_config(cam.rtsp_url("livepreview"))
         return jsonify({"ok": ok, "message": msg})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -1223,11 +1189,6 @@ def ensure_livepreview():
 @app.route("/api/camera/ensure-fishpond", methods=["POST"])
 def ensure_fishpond():
     try:
-        if not is_axis_mode(cfgmod.load()):
-            return jsonify({
-                "ok": False,
-                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
-            }), 400
         _camera().ensure_defaultfishpond_profile()
         return jsonify({"ok": True})
     except Exception as e:
@@ -1237,11 +1198,6 @@ def ensure_fishpond():
 @app.route("/api/camera/ensure-youtubelive", methods=["POST"])
 def ensure_youtubelive():
     try:
-        if not is_axis_mode(cfgmod.load()):
-            return jsonify({
-                "ok": False,
-                "error": "Axis stream profiles are unavailable while RTSP mode is Custom",
-            }), 400
         ok, msg = _camera().ensure_youtubelive_profile()
         return jsonify({"ok": ok, "message": msg})
     except Exception as e:
@@ -1306,7 +1262,9 @@ def rec_start():
         return jsonify({"error": msg}), 400
     with _state_lock:
         _recording_force = True
-    rtsp = resolve_rtsp_url(cfg, RTSP_PURPOSE_RECORD)
+    cam = _camera()
+    prof = cfg.get("recordings_profile", "DefaultFishPond")
+    rtsp = cam.rtsp_url(prof)
     if recorder.start(rtsp, dest):
         _recording_error = None
         return jsonify({"ok": True, "dest": dest, "label": label})

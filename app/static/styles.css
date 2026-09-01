@@ -345,60 +345,95 @@ button.btn-danger {
   box-shadow: 0 4px 14px rgba(225, 29, 72, 0.35);
 }
 
-.video-wrap {
-  position: relative;
-  background: radial-gradient(circle at 50% 50%, #0c1924 0%, #020617 100%);
-  border-radius: var(--radius-sm);
+/* Live tab is a wall display: the video takes the whole viewport below
+   the header and the status/connect bar is pinned to the bottom edge so
+   it stays reachable on a 55" 4K panel without scrolling. Only the Live
+   tab opts in -- the other tabs keep the normal centred document flow. */
+.vue-root.live-fullscreen {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  aspect-ratio: 16 / 9;
-  max-height: 70vh;
-  border: 1px solid var(--border);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
-.video-wrap video {
+.vue-root.live-fullscreen main {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-width: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* main loses its padding above, so the error banner needs its own gutter. */
+.vue-root.live-fullscreen main > .banner {
+  flex: 0 0 auto;
+  margin: 0.75rem 1.25rem 0;
+}
+
+.tab-panel-live {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000;
+}
+
+.live-stage video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background: #000;
 }
 
-.ptz-pad {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 0.4rem;
-  max-width: 210px;
-  margin: 0 auto 0.9rem;
-  padding: 0.5rem;
-  border-radius: 16px;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--border);
+.live-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(0deg, rgba(6, 24, 38, 0.95) 0%, rgba(6, 20, 32, 0.7) 100%);
 }
 
-.ptz-pad button.ptz-dir,
-.ptz-pad button.ptz-stop {
-  padding: 0.55rem;
-  font-size: 1rem;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: rgba(8, 30, 48, 0.9);
-  color: var(--text);
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.12s ease, border-color 0.12s ease;
+.live-bar-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.95rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.ptz-pad button.ptz-dir:hover,
-.ptz-pad button.ptz-stop:hover {
-  border-color: var(--blue);
-  background: rgba(14, 165, 233, 0.15);
+.live-bar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.55rem;
 }
 
-.ptz-pad button:active {
-  background: rgba(45, 212, 191, 0.25);
-}
+/* On a TV the operator reads this from across the room, so scale the
+   header and bottom bar up rather than leaving 15px text on 4K. */
+@media (min-width: 2000px) {
+  .vue-root.live-fullscreen .site-header h1 {
+    font-size: 1.9rem;
+  }
 
-.ptz-pad .blank {
-  visibility: hidden;
+  .vue-root.live-fullscreen .tab-btn,
+  .live-bar-status,
+  .live-bar button.btn {
+    font-size: 1.15rem;
+  }
+
+  .live-bar {
+    padding: 1rem 2rem;
+  }
 }
 
 .status-line {
@@ -743,26 +778,8 @@ tr.sess-stopped td { color: var(--muted); }
   font-size: 0.92rem;
   color: var(--text);
 }
-.ck-row input[type="checkbox"],
-.ck-row input[type="radio"] {
+.ck-row input[type="checkbox"] {
   margin: 0;
-}
-
-.rtsp-mode-row {
-  gap: 1.25rem;
-  margin: 0.4rem 0 0.75rem;
-}
-
-.rtsp-url-input {
-  width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.82rem;
-  word-break: break-all;
-}
-
-.rtsp-url-input[readonly] {
-  opacity: 0.85;
-  cursor: default;
 }
 
 /* Status-page-style ribbon: each <rect> is one bucket (5 min by default).

@@ -19,13 +19,13 @@
   </head>
   <body>
     <script type="text/x-template" id="km-app-template">
-      <div class="vue-root">
+      <div class="vue-root" :class="{ 'live-fullscreen': tab === 'live' }">
         <header class="site-header">
           <div class="brand">
             <span class="brand-mark" aria-hidden="true"></span>
             <div class="brand-text">
               <h1>Wailoa Cam</h1>
-              <p class="tagline">Live view · PTZ · stream & record</p>
+              <p class="tagline">Live view · stream & record</p>
             </div>
           </div>
           <nav class="tabs" aria-label="Main">
@@ -63,60 +63,24 @@
             </div>
           </div>
 
-          <section v-show="tab === 'live'" class="tab-panel">
-            <div class="grid grid-2">
-              <div class="panel panel-accent">
-                <h2>Preview <span class="badge">WebRTC · livepreview</span></h2>
-                <div class="video-wrap">
-                  <video ref="liveVideo" playsinline autoplay muted></video>
-                </div>
-                <div class="row row-actions">
-                  <button type="button" class="btn btn-secondary" @click="startWebRTC">Connect video</button>
-                  <button type="button" class="btn btn-secondary" @click="stopWebRTC">Disconnect</button>
-                </div>
-                <p class="status-line">{{ webrtcStatus }}</p>
-              </div>
-              <div class="panel">
-                <h2>Lens <span class="badge">{{ lensBadge }}</span></h2>
-                <p class="status-line">{{ ptzReadout }}</p>
-                <template v-if="rtspMode === 'axis'">
-                  <div class="ptz-pad">
-                    <span class="blank"></span>
-                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,40,0)" @touchend="ptzStop" aria-label="Tilt up">▲</button>
-                    <span class="blank"></span>
-                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(-40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(-40,0,0)" @touchend="ptzStop" aria-label="Pan left">◀</button>
-                    <button type="button" class="btn-secondary ptz-stop" @click="ptzStop" aria-label="Stop">■</button>
-                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(40,0,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(40,0,0)" @touchend="ptzStop" aria-label="Pan right">▶</button>
-                    <span class="blank"></span>
-                    <button type="button" class="ptz-dir" @mousedown.prevent="ptzMove(0,-40,0)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,-40,0)" @touchend="ptzStop" aria-label="Tilt down">▼</button>
-                    <span class="blank"></span>
-                  </div>
-                </template>
-                <div class="row">
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,-30)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,0,-30)" @touchend="ptzStop">Zoom −</button>
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzMove(0,0,30)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzMove(0,0,30)" @touchend="ptzStop">Zoom +</button>
-                </div>
-                <div class="row" v-if="rtspMode === 'custom'">
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzFocus(-1)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzFocus(-1)" @touchend="ptzStop">Focus −</button>
-                  <button type="button" class="btn btn-secondary" @mousedown.prevent="ptzFocus(1)" @mouseup="ptzStop" @mouseleave="ptzStop" @touchstart.prevent="ptzFocus(1)" @touchend="ptzStop">Focus +</button>
-                  <button type="button" class="btn btn-secondary" @click="ptzStop">Stop</button>
-                </div>
-                <p class="status-line hint" v-if="rtspMode === 'custom'">
-                  Hold Zoom / Focus to drive the lens; release to stop. Manual focus turns autofocus off (vendor API cannot turn AF back on).
-                </p>
-                <div class="row row-actions" v-if="rtspMode === 'axis'">
-                  <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/home',{})">Home preset</button>
-                  <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:true})">AF on</button>
-                  <button type="button" class="btn btn-secondary" @click="api('POST','/api/ptz/autofocus',{on:false})">AF off</button>
-                </div>
-              </div>
+          <section v-show="tab === 'live'" class="tab-panel tab-panel-live">
+            <div class="live-stage">
+              <video ref="liveVideo" playsinline autoplay muted></video>
+            </div>
+            <div class="live-bar">
+              <span class="badge">WebRTC · MCM</span>
+              <span class="live-bar-status">{{ webrtcStatus }}</span>
+              <span class="live-bar-actions">
+                <button type="button" class="btn btn-secondary" @click="startWebRTC">Connect video</button>
+                <button type="button" class="btn btn-secondary" @click="stopWebRTC">Disconnect</button>
+              </span>
             </div>
           </section>
 
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Uses the RTSP URL from Settings (Custom mode: the URL you entered; Axis mode: the <code>youtubelive</code> stream profile). Stream-copied to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
+              <p class="status-line">Pulls the Axis <code>youtubelive</code> stream profile and stream-copies it to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
 
               <h2 class="h2-spaced">
                 YouTube account (API mode)
@@ -339,42 +303,6 @@
                   <input type="password" v-model="camPass" />
                 </div>
               </div>
-              <h2 class="h2-spaced">RTSP URL</h2>
-              <p class="status-line hint">
-                This single URL is used for <strong>live preview</strong>, <strong>YouTube streaming</strong>, and <strong>disk recording</strong>.
-                Axis cameras use <code>/axis-media/media.amp?streamprofile=…</code>;
-                other brands need a custom path (this MC800S5 uses <code>/stream0</code>).
-                Lens controls follow the mode: Axis VAPIX PTZ, or vendor zoom/focus via <code>/setPTZCmd</code>.
-              </p>
-              <div class="row rtsp-mode-row">
-                <label class="ck-row">
-                  <input type="radio" value="axis" v-model="rtspMode" />
-                  Axis format
-                </label>
-                <label class="ck-row">
-                  <input type="radio" value="custom" v-model="rtspMode" />
-                  Custom URL
-                </label>
-              </div>
-              <label>RTSP URL</label>
-              <input
-                type="text"
-                class="rtsp-url-input"
-                v-model="rtspUrlLive"
-                :readonly="rtspMode !== 'custom'"
-                :placeholder="rtspMode === 'custom' ? 'rtsp://user:pass@host:554/…' : ''"
-                spellcheck="false"
-                autocomplete="off"
-              />
-              <div class="row row-actions-spaced" v-if="rtspMode === 'custom'">
-                <button type="button" class="btn btn-secondary" @click="fillDahuaRtsp">Fill MC800S5 /stream0</button>
-                <button type="button" class="btn btn-secondary" @click="fillAxisRtsp">Fill Axis style</button>
-              </div>
-              <p class="status-line hint" v-if="rtspMode === 'axis'">
-                Built from host / user / password + Axis stream profiles
-                (<code>livepreview</code> / <code>youtubelive</code> / recordings profile).
-                Switch to Custom to paste one URL for all uses.
-              </p>
               <h2 class="h2-spaced">Quota</h2>
               <label>Monthly quota (GB, 0 = no bar cap)</label>
               <input type="number" v-model.number="quotaGb" step="0.1" min="0" />
@@ -383,8 +311,8 @@
               <div class="row">
                 <button type="button" class="btn" @click="saveSettings">Save settings</button>
                 <button type="button" class="btn btn-secondary" @click="resetBw">Reset month bandwidth counter</button>
-                <button type="button" class="btn btn-secondary" :disabled="rtspMode === 'custom'" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
-                <button type="button" class="btn btn-secondary" :disabled="rtspMode === 'custom'" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
+                <button type="button" class="btn btn-secondary" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
+                <button type="button" class="btn btn-secondary" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
               </div>
               <p class="status-line">Month counter resets automatically at local midnight on the 1st (by calendar month sum).</p>
             </div>
@@ -520,16 +448,25 @@
       (function () {
         function loadVueThenBoot() {
           var base = (window.__KM_PREFIX || "/").replace(/\/?$/, "/");
-          var s = document.createElement("script");
-          s.src = base + "static/vendor/vue.global.prod.js";
-          s.onload = function () {
-            bootWailoaVue();
+          var mcm = document.createElement("script");
+          mcm.src = base + "static/mcm_webrtc_live.js";
+          mcm.onload = function () {
+            var s = document.createElement("script");
+            s.src = base + "static/vendor/vue.global.prod.js";
+            s.onload = function () {
+              bootWailoaVue();
+            };
+            s.onerror = function () {
+              document.getElementById("app").innerHTML =
+                '<p style="padding:1rem;color:#c00">Failed to load Vue. Rebuild the Docker image (vendor/vue.global.prod.js).</p>';
+            };
+            document.body.appendChild(s);
           };
-          s.onerror = function () {
+          mcm.onerror = function () {
             document.getElementById("app").innerHTML =
-              '<p style="padding:1rem;color:#c00">Failed to load Vue. Rebuild the Docker image (vendor/vue.global.prod.js).</p>';
+              '<p style="padding:1rem;color:#c00">Failed to load MCM WebRTC helper (static/mcm_webrtc_live.js).</p>';
           };
-          document.body.appendChild(s);
+          document.body.appendChild(mcm);
         }
         function bootWailoaVue() {
           var Vue = window.Vue;
@@ -784,10 +721,6 @@
                 camHost: "",
                 camUser: "",
                 camPass: "",
-                rtspMode: "axis",
-                rtspUrlLive: "",
-                rtspUrlYoutube: "",
-                rtspUrlRecord: "",
                 ytKey: "",
                 ytChannelUrl: "",
                 ytAutorestart: true,
@@ -821,7 +754,7 @@
                 bannerText: "",
                 bannerClass: "",
                 webrtcStatus: "Disconnected.",
-                ptzReadout: "—",
+                mcmLive: null,
                 bwText: "—",
                 bwBarPct: 0,
                 ytStderr: "Idle.",
@@ -858,14 +791,9 @@
                 },
                 solarLive: null,
                 pc: null,
-                ptzBackoffMs: 800,
-                ptzTimer: null,
               };
             },
             computed: {
-              lensBadge: function () {
-                return this.rtspMode === "custom" ? "Zoom · Focus" : "PTZ · Axis";
-              },
               recPreviewLine: function () {
                 // Same math as scheduler.recording_preview() in
                 // app/scheduler.py; kept client-side too so the
@@ -1084,14 +1012,6 @@
                     self.camHost = c.camera_host || "";
                     self.camUser = c.camera_user || "";
                     self.camPass = c.camera_pass || "";
-                    self.rtspMode = (c.rtsp_mode === "custom") ? "custom" : "axis";
-                    var resolved = c.rtsp_resolved || {};
-                    self.rtspUrlLive = c.rtsp_url_live || resolved.livepreview || "";
-                    self.rtspUrlYoutube = c.rtsp_url_youtube || "";
-                    self.rtspUrlRecord = c.rtsp_url_record || "";
-                    if (self.rtspMode === "axis") {
-                      self.rtspUrlLive = resolved.livepreview || self.buildAxisRtsp("livepreview");
-                    }
                     self.ytKey = c.youtube_stream_key || "";
                     self.ytChannelUrl = c.youtube_channel_url || "";
                     self.ytAutorestart = c.youtube_health_autorestart !== false;
@@ -1132,42 +1052,6 @@
                     self.bannerClass = "err";
                     self.draftYt = cloneSched({});
                   });
-              },
-              pollPtz: function () {
-                var self = this;
-                if (this.tab !== "live") {
-                  this.schedulePtz(2000);
-                  return;
-                }
-                this.api("GET", "/api/ptz/position")
-                  .then(function (p) {
-                    if (p.backend === "vendor") {
-                      self.ptzReadout =
-                        (p.note || "Vendor lens — no position feedback") +
-                        " · hold Zoom / Focus to move";
-                    } else {
-                      self.ptzReadout =
-                        "pan=" + p.pan + " tilt=" + p.tilt + " zoom=" + p.zoom +
-                        " autofocus=" + (p.autofocus || "?");
-                    }
-                    self.ptzBackoffMs = 800;
-                    self.schedulePtz(self.rtspMode === "custom" ? 5000 : 800);
-                  })
-                  .catch(function () {
-                    self.ptzReadout = self.rtspMode === "custom"
-                      ? "Lens control unavailable (camera offline)"
-                      : "PTZ unavailable (camera offline)";
-                    // Exponential backoff, capped at 30s.
-                    self.ptzBackoffMs = Math.min(30000, Math.max(1000, self.ptzBackoffMs * 2));
-                    self.schedulePtz(self.ptzBackoffMs);
-                  });
-              },
-              schedulePtz: function (ms) {
-                var self = this;
-                if (this.ptzTimer) clearTimeout(this.ptzTimer);
-                this.ptzTimer = setTimeout(function () {
-                  self.pollPtz();
-                }, ms);
               },
               applyYtHealth: function (h, encoderRunning, fullStatus) {
                 // Render the YouTube-side health observation. We have
@@ -1440,59 +1324,61 @@
                   })
                   .catch(function () {});
               },
-              ptzMove: function (pan, tilt, zoom) {
-                this.api("POST", "/api/ptz/move", { pan: pan, tilt: tilt, zoom: zoom, focus: 0 });
-              },
-              ptzFocus: function (dir) {
-                this.api("POST", "/api/ptz/move", { pan: 0, tilt: 0, zoom: 0, focus: dir });
-              },
-              ptzStop: function () {
-                this.api("POST", "/api/ptz/stop", {});
-              },
               startWebRTC: function () {
                 var self = this;
                 var vid = this.$refs.liveVideo;
                 this.stopWebRTC();
-                this.pc = new RTCPeerConnection({ iceServers: [] });
-                this.pc.addTransceiver("video", { direction: "recvonly" });
-                this.pc.ontrack = function (ev) {
-                  if (vid.srcObject !== ev.streams[0]) vid.srcObject = ev.streams[0];
-                };
-                this.pc
-                  .createOffer()
-                  .then(function (offer) {
-                    return self.pc.setLocalDescription(offer);
+                if (!window.McmWebRtcLive) {
+                  this.webrtcStatus = "MCM WebRTC helper not loaded.";
+                  return;
+                }
+                this.webrtcStatus = "Connecting to BlueOS camera manager…";
+                this.mcmLive = window.McmWebRtcLive.create(vid, {
+                  onStatus: function (s) {
+                    self.webrtcStatus = String(s || "");
+                  },
+                  onError: function (e) {
+                    self.webrtcStatus = "WebRTC error: " + String(e || "");
+                  },
+                });
+                // Discover producers over MCM signalling (ws://host:6021) only —
+                // avoids a brittle REST hop through Flask→MCM that Firefox
+                // reports as "NetworkError when attempting to fetch resource."
+                this.mcmLive
+                  .connect()
+                  .then(function () {
+                    return self.mcmLive.playPreferredH264(/wailoa|mc800/i);
                   })
                   .then(function () {
-                    return fetch(kmUrl("/go2rtc/api/webrtc?src=livepreview"), {
-                      method: "POST",
-                      body: self.pc.localDescription.sdp,
-                      headers: { "Content-Type": "application/sdp" },
-                    });
-                  })
-                  .then(function (res) {
-                    if (!res.ok) return res.text().then(function (t) {
-                      throw new Error(t || res.statusText);
-                    });
-                    return res.text();
-                  })
-                  .then(function (answerSdp) {
-                    return self.pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-                  })
-                  .then(function () {
-                    self.webrtcStatus = "Connected.";
+                    self.webrtcStatus = "Connected (MCM) — waiting for frames…";
+                    if (vid && vid.play) {
+                      var p = vid.play();
+                      if (p && p.catch) p.catch(function () {});
+                    }
                   })
                   .catch(function (e) {
-                    self.webrtcStatus = "WebRTC error: " + (e && e.message ? e.message : String(e));
-                    self.stopWebRTC();
+                    var msg = e && e.message ? e.message : String(e);
+                    self.webrtcStatus = "WebRTC error: " + msg;
+                    if (self.mcmLive) {
+                      try {
+                        self.mcmLive.close();
+                      } catch (e2) {}
+                      self.mcmLive = null;
+                    }
                   });
               },
               stopWebRTC: function () {
                 var vid = this.$refs.liveVideo;
+                if (this.mcmLive) {
+                  try {
+                    this.mcmLive.close();
+                  } catch (e) {}
+                  this.mcmLive = null;
+                }
                 if (this.pc) {
                   try {
                     this.pc.close();
-                  } catch (e) {}
+                  } catch (e2) {}
                   this.pc = null;
                 }
                 if (vid && vid.srcObject) {
@@ -1723,46 +1609,13 @@
                   camera_host: String(this.camHost || "").trim(),
                   camera_user: String(this.camUser || "").trim(),
                   camera_pass: this.camPass,
-                  rtsp_mode: this.rtspMode === "custom" ? "custom" : "axis",
                   monthly_quota_gb: parseFloat(this.quotaGb) || 0,
                   bandwidth_overhead_pct: parseFloat(this.overheadPct) || 0,
                 };
-                if (payload.rtsp_mode === "custom") {
-                  var url = String(this.rtspUrlLive || "").trim();
-                  payload.rtsp_url_live = url;
-                  // One URL drives preview, YouTube, and recording.
-                  payload.rtsp_url_youtube = url;
-                  payload.rtsp_url_record = url;
-                }
-                this.api("POST", "/api/config", payload).then(function (c) {
+                this.api("POST", "/api/config", payload).then(function () {
                   alert("Saved. Reload page if camera IP changed.");
                   self.loadConfig({ force: true });
-                  if (c && c.rtsp_resolved && c.rtsp_resolved.livepreview) {
-                    self.rtspUrlLive = payload.rtsp_mode === "custom"
-                      ? (payload.rtsp_url_live || c.rtsp_resolved.livepreview)
-                      : c.rtsp_resolved.livepreview;
-                  }
                 });
-              },
-              buildAxisRtsp: function (profile) {
-                var host = String(this.camHost || "").trim();
-                var user = encodeURIComponent(String(this.camUser || ""));
-                var pass = encodeURIComponent(String(this.camPass || ""));
-                var q = profile ? ("?streamprofile=" + encodeURIComponent(profile)) : "";
-                return "rtsp://" + user + ":" + pass + "@" + host + ":554/axis-media/media.amp" + q;
-              },
-              buildDahuaRtsp: function () {
-                var host = String(this.camHost || "").trim();
-                var user = encodeURIComponent(String(this.camUser || ""));
-                var pass = encodeURIComponent(String(this.camPass || ""));
-                return "rtsp://" + user + ":" + pass + "@" + host + ":554/stream0";
-              },
-              fillDahuaRtsp: function () {
-                this.rtspMode = "custom";
-                this.rtspUrlLive = this.buildDahuaRtsp();
-              },
-              fillAxisRtsp: function () {
-                this.rtspUrlLive = this.buildAxisRtsp("livepreview");
               },
               resetBw: function () {
                 var self = this;
@@ -1851,11 +1704,6 @@
                 try {
                   window.sessionStorage && sessionStorage.setItem("km.tab", v);
                 } catch (e) {}
-                // When the user comes back to Live, try PTZ again immediately.
-                if (v === "live") {
-                  this.ptzBackoffMs = 800;
-                  this.schedulePtz(0);
-                }
               },
               draftYt: {
                 handler: function (v) {
@@ -1863,27 +1711,10 @@
                 },
                 deep: true,
               },
-              rtspMode: function (mode, prev) {
-                if (mode === "axis") {
-                  this.rtspUrlLive = this.buildAxisRtsp("livepreview");
-                } else if (prev === "axis" && !String(this.rtspUrlLive || "").trim()) {
-                  this.rtspUrlLive = this.buildAxisRtsp("livepreview");
-                }
-              },
-              camHost: function () {
-                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
-              },
-              camUser: function () {
-                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
-              },
-              camPass: function () {
-                if (this.rtspMode === "axis") this.rtspUrlLive = this.buildAxisRtsp("livepreview");
-              },
             },
             mounted: function () {
               var self = this;
               this.loadConfig().then(function () {
-                self.pollPtz();
                 self.pollStream();
                 self.pollRec();
                 self.pollStorage();
