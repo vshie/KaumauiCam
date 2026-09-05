@@ -26,9 +26,12 @@ RECORDING_WINDOW_STOP_MIN = 18 * 60       # 18:00 HST
 _DEFAULT_RECORD_SECS = 60
 _DEFAULT_PAUSE_SECS = 120
 
-# Stereo (MarineSitu C3) cycle defaults: 2 min recording, 3 min idle.
+# Stereo (MarineSitu C3) cycle defaults: 2 min recording, 10 min idle.
+# The long pause is a storage decision, not a camera one -- the C3 writes
+# ~2.1 MB/s across its three H.264 tracks, so a shorter duty cycle fills
+# the USB drive in a matter of days.
 STEREO_DEFAULT_RECORD_SECS = 120
-STEREO_DEFAULT_PAUSE_SECS = 180
+STEREO_DEFAULT_PAUSE_SECS = 600
 
 
 def normalize_recordings_cycle(

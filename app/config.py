@@ -44,11 +44,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Stereo (MarineSitu C3 / OAK-D) recording cycle. Same fixed daytime
     # window and record/pause sawtooth as ``recordings_cycle`` above, but
     # driven by the vendored capture script in app/c3record via
-    # app/stereo_recorder.py. Defaults to 2 min recording / 3 min idle.
+    # app/stereo_recorder.py. Defaults to 2 min recording / 10 min idle:
+    # see scheduler.STEREO_DEFAULT_PAUSE_SECS for why the pause is long.
     "stereo_cycle": {
         "enabled": False,
         "record_secs": 120,
-        "pause_secs": 180,
+        "pause_secs": 600,
     },
     "stereo_storage": "auto",  # auto | usb | sd
     # Capture/encode parameters forwarded to c3record/main.py. Exposed here

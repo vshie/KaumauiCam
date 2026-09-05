@@ -889,7 +889,7 @@
                 recFiles: [],
                 stereoEnabled: false,
                 stereoRecordMin: 2.0,
-                stereoPauseMin: 3.0,
+                stereoPauseMin: 10.0,
                 stereoStorage: "auto",
                 stereoEncoder: "vaapi",
                 stereoSegmentSecs: 10,
@@ -1208,7 +1208,7 @@
                       : 2.0;
                     self.stereoPauseMin = sc.pause_secs != null
                       ? Math.round((sc.pause_secs / 60) * 10) / 10
-                      : 3.0;
+                      : 10.0;
                     var st = c.stereo_tunables || {};
                     self.stereoEncoder = st.encoder || "vaapi";
                     self.stereoSegmentSecs = st.segment_secs != null ? st.segment_secs : 10;
