@@ -293,7 +293,7 @@
                 Stereo camera (MarineSitu C3)
                 <span class="badge" :class="stereoBadgeClass">{{ stereoBadgeText }}</span>
               </h2>
-              <p class="status-line">Records synchronised center + left + right video into a single MKV with three H.264 tracks. Each burst is split into {{ stereoSegmentSecs }}-second segment files.</p>
+              <p class="status-line">Records synchronised center + left + right video into a single MKV with three H.264 tracks. Each burst is split into {{ stereoTun.segment_secs }}-second segment files.</p>
               <label class="ck-row">
                 <input type="checkbox" v-model="stereoEnabled" />
                 Enable daily stereo recording cycle (7:45 AM – 6:00 PM HST)
@@ -317,11 +317,112 @@
                 <option value="sd">Local disk (/app/data) only</option>
               </select>
               <label>Encoder</label>
-              <select v-model="stereoEncoder">
+              <select v-model="stereoTun.encoder">
                 <option value="vaapi">VA-API (Intel GPU hardware H.264)</option>
                 <option value="default">Software x264 (high CPU)</option>
                 <option value="nvidia">NVIDIA NVENC</option>
               </select>
+              <details class="adv">
+                <summary>Capture &amp; encode settings</summary>
+                <p class="status-line hint">{{ stereoEncoderScopeHint }}</p>
+                <h3 class="adv-h">Capture</h3>
+                <div class="row">
+                  <div>
+                    <label>Segment length (seconds)</label>
+                    <input type="number" v-model.number="stereoTun.segment_secs" min="1" max="3600" step="1" />
+                  </div>
+                  <div>
+                    <label>Frame rate (fps)</label>
+                    <input type="number" v-model.number="stereoTun.fps" min="1" max="60" step="1" />
+                  </div>
+                  <div>
+                    <label>Sync tolerance (ms)</label>
+                    <input type="number" v-model.number="stereoTun.sync_ms" min="1" max="1000" step="1" />
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label>Colour resolution</label>
+                    <select v-model="stereoTun.color_resolution">
+                      <option value="720">720p (1280x720)</option>
+                      <option value="800">800p (1280x800)</option>
+                      <option value="1080">1080p (1920x1080)</option>
+                      <option value="4k">4K (3840x2160)</option>
+                      <option value="12mp">12 MP (4056x3040)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Stereo (mono) resolution</label>
+                    <select v-model="stereoTun.stereo_resolution">
+                      <option value="400">400p (640x400)</option>
+                      <option value="480">480p (640x480)</option>
+                      <option value="720">720p (1280x720)</option>
+                      <option value="800">800p (1280x800)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>On-camera MJPEG quality (1–100)</label>
+                    <input type="number" v-model.number="stereoTun.mjpeg_quality" min="1" max="100" step="1" />
+                  </div>
+                </div>
+                <h3 class="adv-h">Bitrate</h3>
+                <div class="row">
+                  <div>
+                    <label>Rate control</label>
+                    <select v-model="stereoTun.bitrate_control">
+                      <option value="vbr">VBR (variable)</option>
+                      <option value="cbr">CBR (constant)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Bitrate per stream (kbit/s)</label>
+                    <input type="number" v-model.number="stereoTun.bitrate" min="100" max="100000" step="64" />
+                  </div>
+                  <div>
+                    <label>Max bitrate (kbit/s, blank = unset)</label>
+                    <input type="number" v-model="stereoTun.max_bitrate" min="100" max="100000" step="64" placeholder="unset" />
+                  </div>
+                  <div>
+                    <label>Keyframe interval (GOP)</label>
+                    <input type="number" v-model.number="stereoTun.gop_size" min="1" max="600" step="1" />
+                  </div>
+                </div>
+                <h3 class="adv-h">Quality <span class="badge badge-muted">software x264 only</span></h3>
+                <p class="status-line hint">Quantizers run 0–51 for the quantizer and 0–63 for the bounds, where lower means better quality and bigger files. VA-API and NVENC ignore these and follow the bitrate settings above.</p>
+                <div class="row">
+                  <div>
+                    <label>Quantizer (VBR target, 0–50)</label>
+                    <input type="number" v-model.number="stereoTun.quantizer" min="0" max="50" step="1" />
+                  </div>
+                  <div>
+                    <label>Quality min → qp-max (0–63)</label>
+                    <input type="number" v-model="stereoTun.quality_min" min="0" max="63" step="1" placeholder="unset" />
+                  </div>
+                  <div>
+                    <label>Quality max → qp-min (0–63)</label>
+                    <input type="number" v-model="stereoTun.quality_max" min="0" max="63" step="1" placeholder="unset" />
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label>Speed preset</label>
+                    <select v-model="stereoTun.speed_preset">
+                      <option v-for="p in stereoSpeedPresets" :key="p" :value="p">{{ p }}</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>Tune</label>
+                    <select v-model="stereoTun.tune">
+                      <option v-for="t in stereoTunes" :key="t" :value="t">{{ t }}</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>B-frames (0–4)</label>
+                    <input type="number" v-model.number="stereoTun.bframes" min="0" max="4" step="1" />
+                  </div>
+                </div>
+                <p class="status-line hint">{{ stereoBitrateEstimate }}</p>
+              </details>
               <div class="row">
                 <button type="button" class="btn" @click="saveStereo">Save</button>
                 <button type="button" class="btn" @click="stereoRecordNow">Record now</button>
@@ -891,8 +992,32 @@
                 stereoRecordMin: 2.0,
                 stereoPauseMin: 10.0,
                 stereoStorage: "auto",
-                stereoEncoder: "vaapi",
-                stereoSegmentSecs: 10,
+                // Mirrors config.py's stereo_tunables; every key here is
+                // POSTed to /api/stereo/config, which range-checks them.
+                stereoTun: {
+                  segment_secs: 10,
+                  fps: 30,
+                  sync_ms: 70,
+                  mjpeg_quality: 70,
+                  color_resolution: "1080",
+                  stereo_resolution: "800",
+                  bitrate: 8192,
+                  gop_size: 5,
+                  bframes: 0,
+                  bitrate_control: "vbr",
+                  quantizer: 21,
+                  quality_min: 30,
+                  quality_max: 51,
+                  max_bitrate: "",
+                  speed_preset: "medium",
+                  tune: "zerolatency",
+                  encoder: "vaapi",
+                },
+                stereoSpeedPresets: [
+                  "ultrafast", "superfast", "veryfast", "faster", "fast",
+                  "medium", "slow", "slower", "veryslow", "placebo",
+                ],
+                stereoTunes: ["none", "stillimage", "fastdecode", "zerolatency"],
                 stereoStatus: null,
                 stereoFiles: [],
                 storageInfo: null,
@@ -932,6 +1057,36 @@
                 return "Heads up: the camera takes about 10 seconds to start, " +
                   "so roughly " + lost + "% of each " + Math.round(secs) +
                   "-second burst will be lost to startup.";
+              },
+              stereoEncoderScopeHint: function () {
+                var e = this.stereoTun.encoder;
+                if (e === "vaapi") {
+                  return "VA-API takes the capture and bitrate settings; " +
+                    "the quality section below has no effect on it.";
+                }
+                if (e === "nvidia") {
+                  return "NVENC takes the capture and bitrate settings plus " +
+                    "b-frames, and maps the speed preset coarsely; the " +
+                    "quantizers have no effect on it.";
+                }
+                return "Software x264 honours every setting here, at the " +
+                  "cost of encoding three streams on the CPU.";
+              },
+              stereoBitrateEstimate: function () {
+                // Three H.264 tracks share one MKV, so the on-disk rate is
+                // 3x the per-stream bitrate. Worth showing next to the
+                // segment length because it sets how fast the disk fills.
+                var kbit = Number(this.stereoTun.bitrate) || 0;
+                var secs = Number(this.stereoTun.segment_secs) || 0;
+                if (!(kbit > 0)) return "";
+                var mbPerMin = (kbit * 3 * 60) / 8 / 1024;
+                var line = "About " + mbPerMin.toFixed(0) +
+                  " MB per minute of recording across the three tracks";
+                if (secs > 0) {
+                  var mbPerSeg = (kbit * 3 * secs) / 8 / 1024;
+                  line += ", roughly " + mbPerSeg.toFixed(1) + " MB per segment file";
+                }
+                return line + ".";
               },
               stereoBadgeText: function () {
                 var s = this.stereoStatus;
@@ -1209,9 +1364,14 @@
                     self.stereoPauseMin = sc.pause_secs != null
                       ? Math.round((sc.pause_secs / 60) * 10) / 10
                       : 10.0;
+                    // Only overwrite keys the backend actually sent, so a
+                    // config predating a new tunable keeps our default.
                     var st = c.stereo_tunables || {};
-                    self.stereoEncoder = st.encoder || "vaapi";
-                    self.stereoSegmentSecs = st.segment_secs != null ? st.segment_secs : 10;
+                    Object.keys(self.stereoTun).forEach(function (k) {
+                      if (!(k in st)) return;
+                      // The nullable ints render as empty text inputs.
+                      self.stereoTun[k] = st[k] == null ? "" : st[k];
+                    });
                     self.solarEnabled = c.solar_enabled !== false;
                     self.solarHost = c.solar_host || "192.168.20.66";
                     self.solarInterval = c.solar_interval_secs != null ? c.solar_interval_secs : 60;
@@ -1787,9 +1947,17 @@
                 });
               },
               stereoConfigPayload: function (includeCycle) {
+                // Blank nullable fields go back as null, which tells the
+                // recorder to omit that flag rather than pass an empty one.
+                var tunables = {};
+                var self = this;
+                Object.keys(this.stereoTun).forEach(function (k) {
+                  var v = self.stereoTun[k];
+                  tunables[k] = v === "" || v === null ? null : v;
+                });
                 var payload = {
                   storage: this.stereoStorage,
-                  tunables: { encoder: this.stereoEncoder },
+                  tunables: tunables,
                 };
                 if (includeCycle) {
                   payload.cycle = {
@@ -1806,6 +1974,11 @@
                   .then(function () {
                     alert("Saved.");
                     self.loadConfig({ force: true });
+                  })
+                  .catch(function (e) {
+                    // The backend range-checks every tunable, so a rejected
+                    // save has to say which one rather than no-op silently.
+                    alert("Not saved: " + (e && e.message ? e.message : e));
                   });
               },
               stereoRecordNow: function () {

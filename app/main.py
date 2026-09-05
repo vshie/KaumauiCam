@@ -1603,6 +1603,86 @@ def rec_download(name: str):
 
 STEREO_ENCODERS = ("vaapi", "default", "nvidia")
 
+# Accepted values for every capture/encode parameter the Stereo tab exposes.
+# These are argv for a subprocess, so anything the UI can set has to be
+# range-checked here: a value argparse rejects (or gstreamer chokes on) means
+# a burst that silently produces nothing until the progress watchdog trips.
+#
+# Enum members mirror c3record/main.py's resolution maps and c3_video.py's
+# preset/tune maps -- a value outside them would be silently coerced to a
+# default deep inside the pipeline, or raise.
+STEREO_RESOLUTIONS_COLOR = ("720", "800", "1080", "4k", "2160", "12mp")
+STEREO_RESOLUTIONS_MONO = ("400", "480", "720", "800")
+STEREO_SPEED_PRESETS = (
+    "ultrafast", "superfast", "veryfast", "faster", "fast",
+    "medium", "slow", "slower", "veryslow", "placebo",
+)
+STEREO_TUNES = ("none", "stillimage", "fastdecode", "zerolatency")
+
+# name -> (kind, lo, hi) for numbers, or (kind, choices) for enums.
+# "int_opt" permits null, meaning "don't pass the flag at all".
+STEREO_TUNABLE_SPEC: Dict[str, Any] = {
+    "segment_secs": ("int", 1, 3600),
+    "fps": ("int", 1, 60),
+    "sync_ms": ("int", 1, 1000),
+    "mjpeg_quality": ("int", 1, 100),
+    "bitrate": ("int", 100, 100000),
+    "gop_size": ("int", 1, 600),
+    "bframes": ("int", 0, 4),
+    "quantizer": ("int", 0, 50),
+    "quality_min": ("int_opt", 0, 63),
+    "quality_max": ("int_opt", 0, 63),
+    "max_bitrate": ("int_opt", 100, 100000),
+    "color_resolution": ("enum", STEREO_RESOLUTIONS_COLOR),
+    "stereo_resolution": ("enum", STEREO_RESOLUTIONS_MONO),
+    "bitrate_control": ("enum", ("cbr", "vbr")),
+    "speed_preset": ("enum", STEREO_SPEED_PRESETS),
+    "tune": ("enum", STEREO_TUNES),
+    "encoder": ("enum", STEREO_ENCODERS),
+}
+
+
+def _validate_stereo_tunables(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+    """Coerce a POSTed tunables patch. Returns (clean, error); ``error`` is
+    non-empty if anything was out of range, in which case nothing is saved
+    -- a partial apply would leave a half-configured encoder."""
+    clean: Dict[str, Any] = {}
+    for key, value in raw.items():
+        spec = STEREO_TUNABLE_SPEC.get(key)
+        if spec is None:
+            return {}, f"unknown setting '{key}'"
+        kind = spec[0]
+        if kind == "enum":
+            if value not in spec[1]:
+                return {}, f"{key} must be one of {', '.join(spec[1])}"
+            clean[key] = value
+            continue
+        if kind == "int_opt" and value in (None, ""):
+            clean[key] = None
+            continue
+        try:
+            n = int(round(float(value)))
+        except (TypeError, ValueError):
+            return {}, f"{key} must be a number"
+        lo, hi = spec[1], spec[2]
+        if not (lo <= n <= hi):
+            return {}, f"{key} must be between {lo} and {hi}"
+        clean[key] = n
+    return clean, ""
+
+
+def _stereo_choices() -> Dict[str, Any]:
+    """Enum options and numeric bounds for the advanced settings form, so the
+    UI's selects and min/max attributes come from the same source the
+    validator uses instead of a hand-copied duplicate."""
+    out: Dict[str, Any] = {}
+    for key, spec in STEREO_TUNABLE_SPEC.items():
+        if spec[0] == "enum":
+            out[key] = {"options": list(spec[1])}
+        else:
+            out[key] = {"min": spec[1], "max": spec[2], "optional": spec[0] == "int_opt"}
+    return out
+
 
 def _stereo_list_dir(cfg: Dict[str, Any]) -> str:
     """Destination directory, falling back to the local path so the file
@@ -1626,6 +1706,7 @@ def stereo_config():
                 "storage": cfg.get("stereo_storage"),
                 "tunables": cfg.get("stereo_tunables") or {},
                 "encoders": list(STEREO_ENCODERS),
+                "choices": _stereo_choices(),
             }
         )
     j = request.get_json(force=True, silent=True) or {}
@@ -1638,10 +1719,10 @@ def stereo_config():
         patch["stereo_storage"] = j["storage"]
     tun = j.get("tunables")
     if isinstance(tun, dict):
-        enc = tun.get("encoder")
-        if enc is not None and enc not in STEREO_ENCODERS:
-            return jsonify({"error": f"encoder must be one of {STEREO_ENCODERS}"}), 400
-        patch["stereo_tunables"] = tun
+        clean, err = _validate_stereo_tunables(tun)
+        if err:
+            return jsonify({"error": err}), 400
+        patch["stereo_tunables"] = clean
     updated = cfgmod.update(patch)
     return jsonify(
         {
@@ -1650,6 +1731,7 @@ def stereo_config():
             "storage": updated.get("stereo_storage"),
             "tunables": updated.get("stereo_tunables") or {},
             "encoders": list(STEREO_ENCODERS),
+            "choices": _stereo_choices(),
         }
     )
 

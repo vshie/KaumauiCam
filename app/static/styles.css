@@ -910,6 +910,41 @@ tr.sess-stopped td { color: var(--muted); }
   cursor: pointer;
 }
 
+/* Collapsed-by-default block of encoder tunables. Indented and boxed so the
+   dozen-odd advanced inputs read as one group rather than as a continuation
+   of the tab's primary controls. */
+.adv {
+  margin: 0.6rem 0 0.2rem;
+  padding: 0 0.75rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.adv > summary {
+  margin: 0 -0.75rem;
+  padding: 0.55rem 0.75rem;
+}
+
+.adv-h {
+  margin: 0.85rem 0 0.1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.adv-h .badge {
+  margin-left: 0.4rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.adv .row > div {
+  flex: 1 1 8rem;
+}
+
 @media (max-width: 560px) {
   .sched-ruler-label {
     font-size: 0.6rem;

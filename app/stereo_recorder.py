@@ -41,11 +41,15 @@ logger = logging.getLogger(__name__)
 # own directory at the front of sys.path.
 C3RECORD_MAIN = os.path.join(os.path.dirname(__file__), "c3record", "main.py")
 
-# Segment filename prefix. Also the glob we prune stubs with, so it has to be
-# distinct from the Axis recorder's `wailoa-` files.
-SEGMENT_PREFIX = "stereo-"
-SEGMENT_FORMAT = SEGMENT_PREFIX + "%Y%m%d-%H%M%S-%f.mkv"
-SEGMENT_GLOB = SEGMENT_PREFIX + "*.mkv"
+# Segment filenames, in the upstream C3Record format: a bare UTC timestamp
+# with microseconds. No prefix, so files interoperate with the MarineSitu
+# tooling that expects this exact naming.
+#
+# The glob therefore has to be every MKV in the directory, which is why the
+# stereo recorder gets its own destination (`.../stereo`) separate from the
+# Axis MP4s -- everything matching in there is ours to count and prune.
+SEGMENT_FORMAT = "%Y-%m-%d-%H-%M-%S-%f.mkv"
+SEGMENT_GLOB = "*.mkv"
 
 # A usable segment holds three H.264 tracks; at the default 8 Mbit/s per
 # stream even a 1-second sliver clears this comfortably. Anything smaller is
@@ -198,6 +202,7 @@ class StereoRecorder:
             "--stereo-resolution", str(t["stereo_resolution"]),
             "--bitrate", str(t["bitrate"]),
             "--gop-size", str(t["gop_size"]),
+            "--bframes", str(t["bframes"]),
             "--bitrate-control", str(t["bitrate_control"]),
             "--quantizer", str(t["quantizer"]),
             "--speed-preset", str(t["speed_preset"]),

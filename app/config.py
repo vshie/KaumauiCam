@@ -52,12 +52,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "pause_secs": 600,
     },
     "stereo_storage": "auto",  # auto | usb | sd
-    # Capture/encode parameters forwarded to c3record/main.py. Exposed here
-    # rather than in the UI (apart from the encoder) so they can be tuned in
-    # the field by editing config.json, while the tab stays as simple as the
-    # Axis one. ``segment_secs`` becomes the script's ``--duration``, which
-    # is its per-file segment length, not a total runtime -- the process runs
-    # for the whole record burst and rotates a new MKV this often.
+    # Capture/encode parameters forwarded to c3record/main.py, editable from
+    # the Stereo tab's advanced section. ``segment_secs`` becomes the
+    # script's ``--duration``, which is its per-file segment length, not a
+    # total runtime -- the process runs for the whole record burst and
+    # rotates a new MKV this often.
+    #
+    # Not every parameter reaches every encoder; see c3_video.py's
+    # _init_pipeline. vaapih264enc only honours bitrate, bitrate_control and
+    # gop_size, so the quantizer/quality/preset/tune/bframes knobs are
+    # x264-only (nvenc takes a coarse subset). main.STEREO_TUNABLE_SPEC is
+    # the validation contract for these, and the UI labels which apply.
     "stereo_tunables": {
         "segment_secs": 10,
         "fps": 30,
@@ -67,6 +72,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "stereo_resolution": "800",
         "bitrate": 8192,
         "gop_size": 5,
+        "bframes": 0,
         "bitrate_control": "vbr",
         "quantizer": 21,
         "quality_min": 30,
