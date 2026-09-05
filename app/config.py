@@ -8,7 +8,11 @@ import threading
 from copy import deepcopy
 from typing import Any, Dict, List
 
-from scheduler import migrate_legacy_schedule, normalize_recordings_cycle
+from scheduler import (
+    migrate_legacy_schedule,
+    normalize_recordings_cycle,
+    normalize_stereo_cycle,
+)
 
 _ALL_DAYS: List[str] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -37,6 +41,42 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "recordings_storage": "auto",  # auto | usb | sd
     "recordings_profile": "DefaultFishPond",
+    # Stereo (MarineSitu C3 / OAK-D) recording cycle. Same fixed daytime
+    # window and record/pause sawtooth as ``recordings_cycle`` above, but
+    # driven by the vendored capture script in app/c3record via
+    # app/stereo_recorder.py. Defaults to 2 min recording / 3 min idle.
+    "stereo_cycle": {
+        "enabled": False,
+        "record_secs": 120,
+        "pause_secs": 180,
+    },
+    "stereo_storage": "auto",  # auto | usb | sd
+    # Capture/encode parameters forwarded to c3record/main.py. Exposed here
+    # rather than in the UI (apart from the encoder) so they can be tuned in
+    # the field by editing config.json, while the tab stays as simple as the
+    # Axis one. ``segment_secs`` becomes the script's ``--duration``, which
+    # is its per-file segment length, not a total runtime -- the process runs
+    # for the whole record burst and rotates a new MKV this often.
+    "stereo_tunables": {
+        "segment_secs": 10,
+        "fps": 30,
+        "sync_ms": 70,
+        "mjpeg_quality": 70,
+        "color_resolution": "1080",
+        "stereo_resolution": "800",
+        "bitrate": 8192,
+        "gop_size": 5,
+        "bitrate_control": "vbr",
+        "quantizer": 21,
+        "quality_min": 30,
+        "quality_max": 51,
+        "max_bitrate": None,
+        "speed_preset": "medium",
+        "tune": "zerolatency",
+        # vaapi = hardware H.264 on the Intel GPU; default = software x264,
+        # which costs a lot of CPU for three simultaneous streams.
+        "encoder": "vaapi",
+    },
     "monthly_quota_gb": 100.0,
     "bandwidth_overhead_pct": 3.0,
     # YouTube broadcast health monitor (see app/youtube_monitor.py).
@@ -151,6 +191,16 @@ def load() -> Dict[str, Any]:
                 merged["recordings_cycle"]
             )
         merged.pop("recordings_schedule", None)
+        merged["stereo_cycle"] = normalize_stereo_cycle(
+            {**merged["stereo_cycle"], **(data.get("stereo_cycle") or {})}
+        )
+        # Shallow-merge tunables over the defaults so a config.json written
+        # by an older build (or hand-edited with only a couple of keys)
+        # still picks up any parameter added since.
+        merged["stereo_tunables"] = {
+            **deepcopy(DEFAULT_CONFIG["stereo_tunables"]),
+            **(data.get("stereo_tunables") or {}),
+        }
         return merged
 
 
@@ -170,6 +220,11 @@ def update(partial: Dict[str, Any]) -> Dict[str, Any]:
         elif k == "recordings_cycle" and isinstance(v, dict):
             merged = {**cfg.get(k, {}), **v}
             cfg[k] = normalize_recordings_cycle(merged)
+        elif k == "stereo_cycle" and isinstance(v, dict):
+            merged = {**cfg.get(k, {}), **v}
+            cfg[k] = normalize_stereo_cycle(merged)
+        elif k == "stereo_tunables" and isinstance(v, dict):
+            cfg[k] = {**cfg.get(k, {}), **v}
         elif k == "recordings_schedule":
             # Old clients may still POST this key -- silently ignore
             # rather than 400ing so a stale browser tab doesn't wedge

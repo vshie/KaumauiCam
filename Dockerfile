@@ -3,6 +3,12 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
+# The gstreamer/gi/VA-API packages below are for the stereo (MarineSitu C3)
+# recorder in app/c3record: it decodes the camera's MJPEG streams and encodes
+# H.264 through GStreamer via PyGObject. `vaapih264enc` lives in
+# gstreamer1.0-vaapi and `x264enc` (the software fallback) in plugins-ugly;
+# intel-media-va-driver supplies the iHD VA-API driver this host's Intel GPU
+# needs, with va-driver-all as a catch-all for other GPUs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -14,6 +20,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-vaapi \
+    gir1.2-gstreamer-1.0 \
+    gir1.2-gst-plugins-base-1.0 \
+    python3-gi \
+    python3-gst-1.0 \
+    intel-media-va-driver \
+    va-driver-all \
     exfat-fuse \
     exfatprogs \
     ntfs-3g \

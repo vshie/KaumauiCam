@@ -26,25 +26,36 @@ RECORDING_WINDOW_STOP_MIN = 18 * 60       # 18:00 HST
 _DEFAULT_RECORD_SECS = 60
 _DEFAULT_PAUSE_SECS = 120
 
+# Stereo (MarineSitu C3) cycle defaults: 2 min recording, 3 min idle.
+STEREO_DEFAULT_RECORD_SECS = 120
+STEREO_DEFAULT_PAUSE_SECS = 180
 
-def normalize_recordings_cycle(cycle: Any) -> Dict[str, Any]:
+
+def normalize_recordings_cycle(
+    cycle: Any,
+    default_record: int = _DEFAULT_RECORD_SECS,
+    default_pause: int = _DEFAULT_PAUSE_SECS,
+) -> Dict[str, Any]:
     """Coerce untrusted input (loaded JSON or POST body) into a valid
     ``{enabled, record_secs, pause_secs}`` dict. Non-positive record
     durations fall back to the default so a stray 0 in config.json
     doesn't wedge the scheduler; negative pauses become 0. Kept in
-    this module so both config.load() and the scheduler agree."""
+    this module so both config.load() and the scheduler agree.
+
+    The stereo recorder shares this shape but wants different fallbacks,
+    hence the overridable defaults -- see ``normalize_stereo_cycle``."""
     if not isinstance(cycle, dict):
         cycle = {}
     try:
-        r = int(round(float(cycle.get("record_secs", _DEFAULT_RECORD_SECS))))
+        r = int(round(float(cycle.get("record_secs", default_record))))
     except (TypeError, ValueError):
-        r = _DEFAULT_RECORD_SECS
+        r = default_record
     try:
-        p = int(round(float(cycle.get("pause_secs", _DEFAULT_PAUSE_SECS))))
+        p = int(round(float(cycle.get("pause_secs", default_pause))))
     except (TypeError, ValueError):
-        p = _DEFAULT_PAUSE_SECS
+        p = default_pause
     if r <= 0:
-        r = _DEFAULT_RECORD_SECS
+        r = default_record
     if p < 0:
         p = 0
     return {
@@ -52,6 +63,18 @@ def normalize_recordings_cycle(cycle: Any) -> Dict[str, Any]:
         "record_secs": r,
         "pause_secs": p,
     }
+
+
+def normalize_stereo_cycle(cycle: Any) -> Dict[str, Any]:
+    """``normalize_recordings_cycle`` with the stereo tab's 2-min/3-min
+    fallbacks. The cycle semantics (fixed HST window + record/pause
+    sawtooth) are identical, so ``recording_active`` and
+    ``recording_preview`` serve both recorders unchanged."""
+    return normalize_recordings_cycle(
+        cycle,
+        default_record=STEREO_DEFAULT_RECORD_SECS,
+        default_pause=STEREO_DEFAULT_PAUSE_SECS,
+    )
 
 
 def recording_active(now: dt.datetime, cycle: Any) -> bool:

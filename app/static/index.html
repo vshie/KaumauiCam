@@ -32,6 +32,7 @@
             <button type="button" class="tab-btn" :class="{ active: tab === 'live' }" @click="tab = 'live'">Live</button>
             <button type="button" class="tab-btn" :class="{ active: tab === 'stream' }" @click="tab = 'stream'">Streaming</button>
             <button type="button" class="tab-btn" :class="{ active: tab === 'rec' }" @click="tab = 'rec'">Recordings</button>
+            <button type="button" class="tab-btn" :class="{ active: tab === 'stereo' }" @click="tab = 'stereo'">Stereo</button>
             <button type="button" class="tab-btn" :class="{ active: tab === 'settings' }" @click="tab = 'settings'">Settings</button>
           </nav>
         </header>
@@ -278,6 +279,87 @@
                         <a :href="kmUrl('/api/recordings/download/' + encodeURIComponent(f.name))">Download</a>
                         ·
                         <button type="button" class="link-del" @click="deleteRec(f.name)">Delete</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section v-show="tab === 'stereo'" class="tab-panel">
+            <div class="panel">
+              <h2>
+                Stereo camera (MarineSitu C3)
+                <span class="badge" :class="stereoBadgeClass">{{ stereoBadgeText }}</span>
+              </h2>
+              <p class="status-line">Records synchronised center + left + right video into a single MKV with three H.264 tracks. Each burst is split into {{ stereoSegmentSecs }}-second segment files.</p>
+              <label class="ck-row">
+                <input type="checkbox" v-model="stereoEnabled" />
+                Enable daily stereo recording cycle (7:45 AM – 6:00 PM HST)
+              </label>
+              <div class="row">
+                <div>
+                  <label>Record duration (minutes)</label>
+                  <input type="number" v-model.number="stereoRecordMin" min="0.1" step="0.1" />
+                </div>
+                <div>
+                  <label>Pause between recordings (minutes)</label>
+                  <input type="number" v-model.number="stereoPauseMin" min="0" step="0.1" />
+                </div>
+              </div>
+              <p class="status-line hint">{{ stereoPreviewLine }}</p>
+              <p class="status-line hint" v-if="stereoShortBurstHint">{{ stereoShortBurstHint }}</p>
+              <label>Storage</label>
+              <select v-model="stereoStorage">
+                <option value="auto">Auto (USB if mounted, else local disk)</option>
+                <option value="usb">USB only</option>
+                <option value="sd">Local disk (/app/data) only</option>
+              </select>
+              <label>Encoder</label>
+              <select v-model="stereoEncoder">
+                <option value="vaapi">VA-API (Intel GPU hardware H.264)</option>
+                <option value="default">Software x264 (high CPU)</option>
+                <option value="nvidia">NVIDIA NVENC</option>
+              </select>
+              <div class="row">
+                <button type="button" class="btn" @click="saveStereo">Save</button>
+                <button type="button" class="btn" @click="stereoRecordNow">Record now</button>
+                <button type="button" class="btn btn-danger" @click="stereoStopRecord">Stop recording</button>
+              </div>
+              <p class="status-line">{{ stereoStatusLine }}</p>
+              <p class="status-line hint" v-if="stereoErrorLine">{{ stereoErrorLine }}</p>
+              <details v-if="stereoLogTail.length">
+                <summary>Capture log (last {{ stereoLogTail.length }} lines)</summary>
+                <pre class="log-tail">{{ stereoLogTail.join("\n") }}</pre>
+              </details>
+              <h2 class="h2-spaced">Files</h2>
+              <p class="status-line">{{ stereoSpaceLine }}</p>
+              <div class="row">
+                <button
+                  type="button"
+                  class="btn btn-danger"
+                  :disabled="!stereoFiles.length"
+                  @click="deleteAllStereo"
+                >Delete all stereo recordings</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Size</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="f in stereoFiles" :key="f.name">
+                      <td>{{ f.name }}</td>
+                      <td>{{ fmtBytes(f.size) }}</td>
+                      <td>
+                        <a :href="kmUrl('/api/stereo/download/' + encodeURIComponent(f.name))">Download</a>
+                        ·
+                        <button type="button" class="link-del" @click="deleteStereo(f.name)">Delete</button>
                       </td>
                     </tr>
                   </tbody>
@@ -684,9 +766,41 @@
           function loadStoredTab() {
             try {
               var v = window.sessionStorage && sessionStorage.getItem("km.tab");
-              if (v && ["live", "stream", "rec", "settings"].indexOf(v) >= 0) return v;
+              if (v && ["live", "stream", "rec", "stereo", "settings"].indexOf(v) >= 0) return v;
             } catch (e) {}
             return "live";
+          }
+
+          // Same math as scheduler.recording_preview() in app/scheduler.py;
+          // kept client-side too so the preview updates as the operator
+          // types without a roundtrip. Both the Axis and stereo recorders
+          // share the fixed 07:45-18:00 HST window = 36900 s.
+          function cyclePreviewLine(recordMin, pauseMin) {
+            var windowSecs = 36900;
+            var r = (recordMin || 0) * 60;
+            var p = (pauseMin || 0) * 60;
+            if (!(r > 0)) {
+              return "Enter a positive record duration.";
+            }
+            if (p < 0) p = 0;
+            var cycle = r + p;
+            var full = Math.floor(windowSecs / cycle);
+            var rem = windowSecs - full * cycle;
+            var partial = Math.min(rem, r);
+            var n = full + (partial > 0 ? 1 : 0);
+            var total = full * r + partial;
+            function fmt(secs) {
+              secs = Math.round(secs);
+              var h = Math.floor(secs / 3600);
+              var m = Math.floor((secs % 3600) / 60);
+              var s = secs % 60;
+              if (h > 0) return h + "h " + m + "m";
+              if (m > 0) return m + "m " + (s ? s + "s" : "").trim();
+              return s + "s";
+            }
+            return "About " + n + " recording" + (n === 1 ? "" : "s") +
+              " per day totalling " + fmt(total) +
+              " of video (window 7:45 AM – 6:00 PM HST).";
           }
 
           function loadStoredDraft(key) {
@@ -773,6 +887,14 @@
                 linkBuckets: [],
                 recStatusLine: "—",
                 recFiles: [],
+                stereoEnabled: false,
+                stereoRecordMin: 2.0,
+                stereoPauseMin: 3.0,
+                stereoStorage: "auto",
+                stereoEncoder: "vaapi",
+                stereoSegmentSecs: 10,
+                stereoStatus: null,
+                stereoFiles: [],
                 storageInfo: null,
                 solarEnabled: true,
                 solarHost: "192.168.20.66",
@@ -795,35 +917,72 @@
             },
             computed: {
               recPreviewLine: function () {
-                // Same math as scheduler.recording_preview() in
-                // app/scheduler.py; kept client-side too so the
-                // preview updates as the operator types without a
-                // roundtrip. Fixed 07:45-18:00 HST window = 36900 s.
-                var windowSecs = 36900;
-                var r = (this.recRecordMin || 0) * 60;
-                var p = (this.recPauseMin || 0) * 60;
-                if (!(r > 0)) {
-                  return "Enter a positive record duration.";
+                return cyclePreviewLine(this.recRecordMin, this.recPauseMin);
+              },
+              stereoPreviewLine: function () {
+                return cyclePreviewLine(this.stereoRecordMin, this.stereoPauseMin);
+              },
+              stereoShortBurstHint: function () {
+                // The camera is on Ethernet and takes roughly 10 s to boot
+                // its pipeline before the first frame lands, so short
+                // bursts lose a big fraction of their time to startup.
+                var secs = (this.stereoRecordMin || 0) * 60;
+                if (!(secs > 0) || secs >= 60) return "";
+                var lost = Math.round((10 / secs) * 100);
+                return "Heads up: the camera takes about 10 seconds to start, " +
+                  "so roughly " + lost + "% of each " + Math.round(secs) +
+                  "-second burst will be lost to startup.";
+              },
+              stereoBadgeText: function () {
+                var s = this.stereoStatus;
+                if (!s) return "—";
+                if (s.stopping) return "Finalizing";
+                if (s.running) return "Recording";
+                if (s.error) return "Error";
+                return "Idle";
+              },
+              stereoBadgeClass: function () {
+                var s = this.stereoStatus;
+                if (!s) return "badge-muted";
+                if (s.running || s.stopping) return "badge-good";
+                if (s.error) return "badge-bad";
+                return "badge-muted";
+              },
+              stereoStatusLine: function () {
+                var s = this.stereoStatus;
+                if (!s) return "—";
+                var parts = [];
+                if (s.stopping) parts.push("Finalizing last segment");
+                else if (s.running) parts.push("Recording");
+                else parts.push("Idle");
+                if (s.force) parts.push("manual");
+                parts.push(s.label === "usb" ? "USB" : "local disk");
+                if (s.dest) parts.push(s.dest);
+                if (s.running && s.uptime_secs) {
+                  parts.push("up " + Math.round(s.uptime_secs) + "s");
                 }
-                if (p < 0) p = 0;
-                var cycle = r + p;
-                var full = Math.floor(windowSecs / cycle);
-                var rem = windowSecs - full * cycle;
-                var partial = Math.min(rem, r);
-                var n = full + (partial > 0 ? 1 : 0);
-                var total = full * r + partial;
-                function fmt(secs) {
-                  secs = Math.round(secs);
-                  var h = Math.floor(secs / 3600);
-                  var m = Math.floor((secs % 3600) / 60);
-                  var s = secs % 60;
-                  if (h > 0) return h + "h " + m + "m";
-                  if (m > 0) return m + "m " + (s ? s + "s" : "").trim();
-                  return s + "s";
+                return parts.join(" · ");
+              },
+              stereoErrorLine: function () {
+                var s = this.stereoStatus;
+                if (!s || !s.error) return "";
+                return "Last error: " + s.error;
+              },
+              stereoLogTail: function () {
+                var s = this.stereoStatus;
+                return (s && s.stderr_tail) || [];
+              },
+              stereoSpaceLine: function () {
+                var s = this.stereoStatus;
+                if (!s || s.free_bytes == null) return "Checking free space…";
+                var floor = s.min_free_bytes || 0;
+                var line =
+                  this.fmtBytes(s.free_bytes) + " free at " + (s.dest || "?") +
+                  " · recording stops below " + this.fmtBytes(floor) + ".";
+                if (s.free_bytes < floor) {
+                  line += " Not enough space to record.";
                 }
-                return "About " + n + " recording" + (n === 1 ? "" : "s") +
-                  " per day totalling " + fmt(total) +
-                  " of video (window 7:45 AM – 6:00 PM HST).";
+                return line;
               },
               storageBadgeText: function () {
                 var s = this.storageInfo;
@@ -1041,6 +1200,18 @@
                     self.recPauseMin = rc.pause_secs != null
                       ? Math.round((rc.pause_secs / 60) * 10) / 10
                       : 2.0;
+                    self.stereoStorage = c.stereo_storage || "auto";
+                    var sc = c.stereo_cycle || {};
+                    self.stereoEnabled = !!sc.enabled;
+                    self.stereoRecordMin = sc.record_secs != null
+                      ? Math.round((sc.record_secs / 60) * 10) / 10
+                      : 2.0;
+                    self.stereoPauseMin = sc.pause_secs != null
+                      ? Math.round((sc.pause_secs / 60) * 10) / 10
+                      : 3.0;
+                    var st = c.stereo_tunables || {};
+                    self.stereoEncoder = st.encoder || "vaapi";
+                    self.stereoSegmentSecs = st.segment_secs != null ? st.segment_secs : 10;
                     self.solarEnabled = c.solar_enabled !== false;
                     self.solarHost = c.solar_host || "192.168.20.66";
                     self.solarInterval = c.solar_interval_secs != null ? c.solar_interval_secs : 60;
@@ -1306,6 +1477,18 @@
                   })
                   .then(function (list) {
                     self.recFiles = list.files || [];
+                  })
+                  .catch(function () {});
+              },
+              pollStereo: function () {
+                var self = this;
+                this.api("GET", "/api/stereo/status")
+                  .then(function (s) {
+                    self.stereoStatus = s || null;
+                    return self.api("GET", "/api/stereo/list");
+                  })
+                  .then(function (list) {
+                    self.stereoFiles = (list && list.files) || [];
                   })
                   .catch(function () {});
               },
@@ -1603,6 +1786,88 @@
                   }
                 });
               },
+              stereoConfigPayload: function (includeCycle) {
+                var payload = {
+                  storage: this.stereoStorage,
+                  tunables: { encoder: this.stereoEncoder },
+                };
+                if (includeCycle) {
+                  payload.cycle = {
+                    enabled: !!this.stereoEnabled,
+                    record_secs: Math.max(1, Math.round((this.stereoRecordMin || 0) * 60)),
+                    pause_secs: Math.max(0, Math.round((this.stereoPauseMin || 0) * 60)),
+                  };
+                }
+                return payload;
+              },
+              saveStereo: function () {
+                var self = this;
+                this.api("POST", "/api/stereo/config", this.stereoConfigPayload(true))
+                  .then(function () {
+                    alert("Saved.");
+                    self.loadConfig({ force: true });
+                  });
+              },
+              stereoRecordNow: function () {
+                var self = this;
+                // Persist storage + encoder first so the burst we're about
+                // to force uses whatever is currently selected, matching
+                // how "Record now" behaves on the Recordings tab.
+                this.api("POST", "/api/stereo/config", this.stereoConfigPayload(false))
+                  .then(function () {
+                    return self.api("POST", "/api/stereo/start", {});
+                  })
+                  .then(function () {
+                    self.pollStereo();
+                  })
+                  .catch(function (e) {
+                    alert("Could not start: " + (e && e.message ? e.message : e));
+                  });
+              },
+              stereoStopRecord: function () {
+                var self = this;
+                this.api("POST", "/api/stereo/stop", {}).then(function () {
+                  self.pollStereo();
+                });
+              },
+              deleteStereo: function (name) {
+                var self = this;
+                if (!confirm("Delete " + name + "?")) return;
+                this.api("POST", "/api/stereo/delete", { name: name }).then(function () {
+                  self.pollStereo();
+                });
+              },
+              deleteAllStereo: function () {
+                var self = this;
+                var n = (this.stereoFiles || []).length;
+                if (!n) return;
+                var msg =
+                  "Delete ALL " +
+                  n +
+                  " stereo recording" +
+                  (n === 1 ? "" : "s") +
+                  "? This cannot be undone." +
+                  "\n\n(The currently recording segment, if any, is kept.)";
+                if (!confirm(msg)) return;
+                var typed = prompt('Type "DELETE" to confirm clearing all stereo recordings.');
+                if (typed !== "DELETE") {
+                  alert("Cancelled — nothing was deleted.");
+                  return;
+                }
+                this.api("POST", "/api/stereo/delete-all", {}).then(function (res) {
+                  self.pollStereo();
+                  if (res && res.errors && res.errors.length) {
+                    alert(
+                      "Deleted " +
+                        (res.deleted || 0) +
+                        " file(s); " +
+                        res.errors.length +
+                        " error(s):\n" +
+                        res.errors.join("\n"),
+                    );
+                  }
+                });
+              },
               saveSettings: function () {
                 var self = this;
                 var payload = {
@@ -1717,6 +1982,7 @@
               this.loadConfig().then(function () {
                 self.pollStream();
                 self.pollRec();
+                self.pollStereo();
                 self.pollStorage();
                 self.pollLink();
                 self.pollSolar();
@@ -1727,6 +1993,9 @@
               }, 2000);
               setInterval(function () {
                 self.pollRec();
+              }, 3000);
+              setInterval(function () {
+                self.pollStereo();
               }, 3000);
               setInterval(function () {
                 self.pollStorage();

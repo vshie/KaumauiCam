@@ -31,11 +31,14 @@ from scheduler import (
     schedule_now,
     should_be_on,
 )
+from stereo_recorder import MIN_SEGMENT_BYTES as STEREO_MIN_SEGMENT_BYTES
+from stereo_recorder import StereoRecorder
 from usb_storage import (
     USB_MOUNT_POINT,
     get_free_mb,
     get_recording_dir_usb,
     get_status as usb_status,
+    get_stereo_dir_usb,
     is_mounted,
     sd_card_free_gb,
     start_probe,
@@ -114,6 +117,77 @@ def _recorder_should_continue() -> bool:
 
 
 recorder = Recorder(should_continue=_recorder_should_continue)
+
+# Free-space floors for the stereo recorder. The C3 writes three H.264
+# tracks at once (~3 MB/s at the default bitrate), so it eats disk far
+# faster than the Axis stream-copy -- and unlike the Axis path it can be
+# pointed at the local disk, which is also BlueOS's root filesystem. Leave
+# 4 GB there so filling the drive can never wedge the vehicle; the USB
+# drive is expendable so it only needs enough headroom to close the
+# current MKV cleanly.
+STEREO_LOCAL_MIN_FREE_BYTES = 4 * 1024**3
+STEREO_USB_MIN_FREE_BYTES = 1 * 1024**3
+
+
+def _stereo_should_continue() -> bool:
+    """Stereo counterpart to ``_recorder_should_continue``. Consulted before
+    each child launch so we don't pay the ~10 s DepthAI pipeline bootup for
+    a burst that's about to end anyway.
+
+    The look-ahead is capped at a third of the record duration rather than
+    using RECORDER_TAIL_GUARD_SECS flat: a fixed 30 s guard means any burst
+    shorter than 30 s is *always* within the guard window and would never
+    start at all, silently."""
+    try:
+        with _state_lock:
+            if _stereo_force:
+                return True
+        cfg = cfgmod.load()
+        sc = cfg.get("stereo_cycle") or {}
+        if not sc.get("enabled", False):
+            return False
+        record_secs = int(sc.get("record_secs") or 0)
+        guard = min(RECORDER_TAIL_GUARD_SECS, max(1, record_secs // 3))
+        soon = schedule_now() + dt.timedelta(seconds=guard)
+        return recording_active(soon, sc)
+    except Exception:
+        logger.exception("stereo_should_continue")
+        return True
+
+
+def _stereo_free_bytes(dest_dir: str) -> int | None:
+    try:
+        st = os.statvfs(dest_dir)
+    except OSError:
+        return None
+    return st.f_bavail * st.f_frsize
+
+
+def _stereo_min_free_bytes(dest_dir: str) -> int:
+    on_usb = os.path.abspath(dest_dir).startswith(USB_MOUNT_POINT + os.sep)
+    return STEREO_USB_MIN_FREE_BYTES if on_usb else STEREO_LOCAL_MIN_FREE_BYTES
+
+
+def _stereo_space_ok(dest_dir: str) -> str | None:
+    """Return a reason to stop recording, or None to keep going. Polled by
+    the supervisor while the child runs, since one invocation writes for the
+    whole burst instead of re-checking at each segment start."""
+    free = _stereo_free_bytes(dest_dir)
+    if free is None:
+        return None
+    floor = _stereo_min_free_bytes(dest_dir)
+    if free >= floor:
+        return None
+    return (
+        f"low disk space: {free / 1024**3:.1f} GB free at {dest_dir}, "
+        f"need >= {floor / 1024**3:.0f} GB"
+    )
+
+
+stereo = StereoRecorder(
+    should_continue=_stereo_should_continue,
+    space_ok=_stereo_space_ok,
+)
 go2rtc_sup = Go2RtcSupervisor()
 
 _state_lock = threading.Lock()
@@ -136,6 +210,8 @@ _youtube_kickoff_start = 0.0
 # bounce / stop / a confirmed YT-LIVE poll.
 _link_drop_during_session = False
 _recording_error: str | None = None
+_stereo_force = False
+_stereo_error: str | None = None
 _boot_applied = False
 
 # Scheduler timing. Tick is short so a crashed YouTube ffmpeg gets respawned
@@ -194,6 +270,36 @@ def _can_start_recording(cfg: Dict[str, Any], dest_dir: str, label: str) -> Tupl
         free_mb = get_free_mb()
         if free_mb is not None and free_mb < 100:
             return False, f"USB low space: {free_mb} MB"
+    return True, "ok"
+
+
+def _stereo_dir(cfg: Dict[str, Any]) -> Tuple[str, str]:
+    """Return (directory, mode label) for stereo MKVs. Mirrors
+    ``_recording_dir`` but writes to a separate labeled subdirectory so the
+    C3 files never mix with the Axis MP4s."""
+    mode = cfg.get("stereo_storage", "auto")
+    try_mount()
+    usb_mounted = is_mounted()
+    if mode == "usb":
+        if not usb_mounted:
+            raise RuntimeError("USB storage not mounted")
+        return get_stereo_dir_usb(), "usb"
+    if mode == "sd":
+        d = os.path.join("/app/data", "stereo")
+        os.makedirs(d, exist_ok=True)
+        return d, "sd"
+    # auto
+    if usb_mounted:
+        return get_stereo_dir_usb(), "usb"
+    d = os.path.join("/app/data", "stereo")
+    os.makedirs(d, exist_ok=True)
+    return d, "sd"
+
+
+def _can_start_stereo(dest_dir: str) -> Tuple[bool, str]:
+    reason = _stereo_space_ok(dest_dir)
+    if reason:
+        return False, reason
     return True, "ok"
 
 
@@ -318,6 +424,67 @@ def _listen_ports_to_try() -> list[int]:
     return out
 
 
+_stereo_stop_thread: threading.Thread | None = None
+
+
+def _stereo_stop_async() -> None:
+    """Tear the stereo child down off the scheduler thread.
+
+    Finalizing the current MKV after SIGINT takes a couple of seconds
+    normally and up to ~40 s if the child wedges. The scheduler thread also
+    supervises the YouTube ffmpeg, so blocking it there would show up to
+    viewers as a stalled stream. ``StereoRecorder.stop`` is idempotent, so
+    the only thing we need to guard is spawning a second teardown thread."""
+    global _stereo_stop_thread
+    with _state_lock:
+        if _stereo_stop_thread is not None and _stereo_stop_thread.is_alive():
+            return
+        t = threading.Thread(target=stereo.stop, daemon=True, name="stereo-stop")
+        _stereo_stop_thread = t
+    t.start()
+
+
+def _stereo_stopping() -> bool:
+    with _state_lock:
+        t = _stereo_stop_thread
+    return t is not None and t.is_alive()
+
+
+def _tick_stereo(cfg: Dict[str, Any], now: dt.datetime) -> None:
+    """One scheduler tick for the stereo recorder.
+
+    Kept in its own function, called before the YouTube/Axis sections, so
+    the ``continue`` statements those use to skip a tick on error can't
+    starve the stereo cycle."""
+    global _stereo_error
+    sc = cfg.get("stereo_cycle") or {}
+    sched = sc.get("enabled", False) and recording_active(now, sc)
+    with _state_lock:
+        force = _stereo_force
+    if not (force or sched):
+        if stereo.is_running():
+            _stereo_stop_async()
+        return
+    if stereo.is_running() or _stereo_stopping():
+        return
+    # Same tail guard as the Axis recorder: don't pay the DepthAI pipeline
+    # bootup for a burst that's about to end.
+    if not _stereo_should_continue():
+        return
+    try:
+        dest, _label = _stereo_dir(cfg)
+    except Exception as e:
+        _stereo_error = str(e)
+        return
+    ok, msg = _can_start_stereo(dest)
+    if not ok:
+        _stereo_error = msg
+        return
+    _stereo_error = None
+    if not stereo.start(dest, cfg.get("stereo_tunables") or {}):
+        _stereo_error = "Stereo recorder failed to start"
+
+
 def _scheduler_loop() -> None:
     global _youtube_force, _recording_force, _youtube_session_start, _recording_error
     global _youtube_kickoff_start, _link_drop_during_session
@@ -326,6 +493,8 @@ def _scheduler_loop() -> None:
             cfg = cfgmod.load()
 
             now = schedule_now()
+
+            _tick_stereo(cfg, now)
 
             # YouTube desired. Within an active window we want continuous
             # presence on YouTube Live, so the scheduler treats this as a
@@ -664,7 +833,7 @@ def register_service():
     return jsonify(
         {
             "name": "Wailoa Cam",
-            "description": "Axis live view, YouTube Live scheduling, and local recordings.",
+            "description": "Axis live view, YouTube Live scheduling, and Axis + stereo recordings.",
             "icon": "mdi-fish",
             "company": "Blue Robotics",
             "version": _EXTENSION_VERSION,
@@ -1418,6 +1587,213 @@ def rec_download(name: str):
     cfg = cfgmod.load()
     try:
         dest, _ = _recording_dir(cfg)
+    except Exception as e:
+        return str(e), 400
+    path = os.path.join(dest, name)
+    if os.path.isfile(path):
+        return send_file(path, as_attachment=True, download_name=name)
+    return "not found", 404
+
+
+# --- stereo (MarineSitu C3) ------------------------------------------------
+# Mirrors the /api/recordings/* surface above. Deliberately a parallel set of
+# routes rather than a mode parameter on the existing ones: the two recorders
+# have different destinations, file extensions and failure modes, and the UI
+# polls them independently.
+
+STEREO_ENCODERS = ("vaapi", "default", "nvidia")
+
+
+def _stereo_list_dir(cfg: Dict[str, Any]) -> str:
+    """Destination directory, falling back to the local path so the file
+    list still renders when the USB drive is missing."""
+    try:
+        dest, _ = _stereo_dir(cfg)
+    except Exception:
+        dest = os.path.join("/app/data", "stereo")
+    return dest
+
+
+@app.route("/api/stereo/config", methods=["GET", "POST"])
+def stereo_config():
+    if request.method == "GET":
+        cfg = cfgmod.load()
+        cycle = cfg.get("stereo_cycle") or {}
+        return jsonify(
+            {
+                "cycle": cycle,
+                "preview": recording_preview(cycle),
+                "storage": cfg.get("stereo_storage"),
+                "tunables": cfg.get("stereo_tunables") or {},
+                "encoders": list(STEREO_ENCODERS),
+            }
+        )
+    j = request.get_json(force=True, silent=True) or {}
+    patch: Dict[str, Any] = {}
+    if "cycle" in j and isinstance(j["cycle"], dict):
+        patch["stereo_cycle"] = j["cycle"]
+    if "storage" in j:
+        if j["storage"] not in ("auto", "usb", "sd"):
+            return jsonify({"error": "storage must be auto, usb or sd"}), 400
+        patch["stereo_storage"] = j["storage"]
+    tun = j.get("tunables")
+    if isinstance(tun, dict):
+        enc = tun.get("encoder")
+        if enc is not None and enc not in STEREO_ENCODERS:
+            return jsonify({"error": f"encoder must be one of {STEREO_ENCODERS}"}), 400
+        patch["stereo_tunables"] = tun
+    updated = cfgmod.update(patch)
+    return jsonify(
+        {
+            "cycle": updated.get("stereo_cycle"),
+            "preview": recording_preview(updated.get("stereo_cycle") or {}),
+            "storage": updated.get("stereo_storage"),
+            "tunables": updated.get("stereo_tunables") or {},
+            "encoders": list(STEREO_ENCODERS),
+        }
+    )
+
+
+@app.route("/api/stereo/start", methods=["POST"])
+def stereo_start():
+    global _stereo_force, _stereo_error
+    cfg = cfgmod.load()
+    try:
+        dest, label = _stereo_dir(cfg)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    ok, msg = _can_start_stereo(dest)
+    if not ok:
+        return jsonify({"error": msg}), 400
+    if _stereo_stopping():
+        return jsonify({"error": "previous recording still finalizing"}), 409
+    with _state_lock:
+        _stereo_force = True
+    if stereo.start(dest, cfg.get("stereo_tunables") or {}):
+        _stereo_error = None
+        return jsonify({"ok": True, "dest": dest, "label": label})
+    return jsonify({"error": "start failed"}), 500
+
+
+@app.route("/api/stereo/stop", methods=["POST"])
+def stereo_stop():
+    global _stereo_force
+    with _state_lock:
+        _stereo_force = False
+    # Off-thread so the request returns immediately rather than waiting out
+    # the child's MKV finalize; the UI polls /api/stereo/status for the
+    # transition to idle.
+    _stereo_stop_async()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/stereo/status", methods=["GET"])
+def stereo_status():
+    cfg = cfgmod.load()
+    with _state_lock:
+        force = _stereo_force
+        err = _stereo_error
+    try:
+        dest, label = _stereo_dir(cfg)
+    except Exception as e:
+        dest, label = "", str(e)
+    st = stereo.status()
+    free = _stereo_free_bytes(dest) if dest else None
+    st.update(
+        {
+            "dest": dest,
+            "label": label,
+            # Surface whichever error we have: the scheduler's (couldn't
+            # even pick a destination) takes precedence over the
+            # supervisor's (child failed to produce video).
+            "error": err or st.get("last_error"),
+            "force": force,
+            "stopping": _stereo_stopping(),
+            "free_bytes": free,
+            "min_free_bytes": _stereo_min_free_bytes(dest) if dest else None,
+        }
+    )
+    return jsonify(st)
+
+
+@app.route("/api/stereo/list", methods=["GET"])
+def stereo_list():
+    dest = _stereo_list_dir(cfgmod.load())
+    # Same stub-hiding rationale as /api/recordings/list, except the
+    # in-progress segment is identified by the supervisor's newest-file
+    # scan rather than a filename we chose ourselves.
+    current = stereo.status().get("current_file") or ""
+    current_name = os.path.basename(current) if current else ""
+    items = []
+    if os.path.isdir(dest):
+        for n in sorted(os.listdir(dest), reverse=True):
+            if not n.endswith(".mkv"):
+                continue
+            p = os.path.join(dest, n)
+            try:
+                sz = os.path.getsize(p)
+                if sz < STEREO_MIN_SEGMENT_BYTES and n != current_name:
+                    continue
+                items.append({"name": n, "size": sz, "mtime": os.path.getmtime(p)})
+            except OSError:
+                pass
+    return jsonify({"files": items, "dir": dest})
+
+
+@app.route("/api/stereo/delete", methods=["POST"])
+def stereo_delete():
+    j = request.get_json(force=True, silent=True) or {}
+    name = j.get("name", "")
+    if not name or "/" in name or ".." in name:
+        return jsonify({"error": "bad name"}), 400
+    cfg = cfgmod.load()
+    try:
+        dest, _ = _stereo_dir(cfg)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    path = os.path.join(dest, name)
+    if os.path.isfile(path):
+        os.remove(path)
+        return jsonify({"ok": True})
+    return jsonify({"error": "not found"}), 404
+
+
+@app.route("/api/stereo/delete-all", methods=["POST"])
+def stereo_delete_all():
+    cfg = cfgmod.load()
+    try:
+        dest, _ = _stereo_dir(cfg)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+    if not os.path.isdir(dest):
+        return jsonify({"ok": True, "deleted": 0, "errors": []})
+    # Skip the segment currently being written so we don't fight gstreamer.
+    current = stereo.status().get("current_file") or ""
+    current_name = os.path.basename(current) if current else ""
+    deleted = 0
+    errors: list[str] = []
+    for n in os.listdir(dest):
+        if not n.endswith(".mkv"):
+            continue
+        if current_name and n == current_name:
+            continue
+        p = os.path.join(dest, n)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+                deleted += 1
+        except OSError as e:
+            errors.append(f"{n}: {e}")
+    return jsonify({"ok": True, "deleted": deleted, "errors": errors})
+
+
+@app.route("/api/stereo/download/<name>")
+def stereo_download(name: str):
+    if "/" in name or ".." in name:
+        return "bad", 400
+    cfg = cfgmod.load()
+    try:
+        dest, _ = _stereo_dir(cfg)
     except Exception as e:
         return str(e), 400
     path = os.path.join(dest, name)

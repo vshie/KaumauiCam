@@ -884,10 +884,11 @@ tr.sess-stopped td { color: var(--muted); }
   color: var(--text);
 }
 
-/* CSV preview pane -- capped height with horizontal scroll for very
-   long header rows. Monospace so columns line up visually on the
-   Settings page. */
-.solar-preview {
+/* Capped-height monospace panes with horizontal scroll: the solar CSV
+   preview (long header rows line up visually) and the stereo capture log
+   tail (raw gstreamer/depthai output, which must not wrap). */
+.solar-preview,
+.log-tail {
   margin: 0.35rem 0 0.2rem;
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--border);
@@ -900,6 +901,13 @@ tr.sess-stopped td { color: var(--muted); }
   max-height: 180px;
   overflow: auto;
   white-space: pre;
+}
+
+.tab-panel summary {
+  margin-top: 0.55rem;
+  font-size: 0.84rem;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 @media (max-width: 560px) {

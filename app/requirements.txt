@@ -1,3 +1,13 @@
 flask>=3.0.0
 requests>=2.31.0
 PyYAML>=6.0.1
+# Stereo (MarineSitu C3 / OAK-D) capture. Pinned because the vendored
+# app/c3record scripts were written against the 2.29 pipeline API.
+# Only ships manylinux x86_64 wheels -- see the amd64-only deploy workflow.
+depthai==2.29.0.0
+# c3_video imports numpy at module scope (its MKV reader returns frames as
+# arrays). depthai does not declare it as a dependency, so pin it here or
+# the stereo recorder dies on import. PyGObject/GStreamer come from apt --
+# see the Dockerfile -- because building them from a wheel needs the whole
+# girepository/cairo toolchain.
+numpy>=1.21,<3

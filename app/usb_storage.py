@@ -131,6 +131,14 @@ def get_recording_dir_usb() -> str:
     return base
 
 
+def get_stereo_dir_usb() -> str:
+    """Labeled directory for MarineSitu C3 stereo MKVs, kept separate from
+    the Axis MP4s so the two file lists never mix."""
+    base = os.path.join(USB_MOUNT_POINT, WAILOA_DIR, "stereo")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
 def get_status() -> dict:
     mounted = is_mounted()
     free = get_free_mb(USB_MOUNT_POINT) if mounted else None
