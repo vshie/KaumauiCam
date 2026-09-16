@@ -378,6 +378,15 @@ def _apply_boot() -> None:
     if _boot_applied:
         return
     _boot_applied = True
+    # Bring up the fixed live feed first. The legacy Axis profile calls below
+    # can each wait for an HTTP timeout when that camera is offline; they must
+    # not hold the default Live tab's source hostage during extension startup.
+    try:
+        logger.info("boot livepreview RTSP: %s", CAMERA_RTSP_URL)
+        render_config(CAMERA_RTSP_URL)
+        go2rtc_sup.start()
+    except Exception as e:
+        logger.warning("boot go2rtc: %s", e)
     try:
         cam = _camera()
         cam.ensure_defaultfishpond_profile()
@@ -389,12 +398,6 @@ def _apply_boot() -> None:
         logger.info("boot youtubelive profile: %s (%s)", msg, ok)
     except Exception as e:
         logger.warning("boot youtubelive profile: %s", e)
-    try:
-        logger.info("boot livepreview RTSP: %s", CAMERA_RTSP_URL)
-        render_config(CAMERA_RTSP_URL)
-        go2rtc_sup.start()
-    except Exception as e:
-        logger.warning("boot go2rtc: %s", e)
 
 
 def _redact_rtsp(url: str) -> str:
