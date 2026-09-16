@@ -66,10 +66,13 @@
 
           <section v-show="tab === 'live'" class="tab-panel tab-panel-live">
             <div class="live-stage">
-              <video ref="liveVideo" playsinline autoplay muted></video>
+              <div class="live-frame">
+                <video ref="liveVideo" playsinline autoplay muted></video>
+              </div>
             </div>
             <div class="live-bar">
-              <span class="badge">WebRTC · MCM</span>
+              <span class="badge">WebRTC · go2rtc</span>
+              <code class="live-stream-url">{{ cameraStreamUrl }}</code>
               <span class="live-bar-status">{{ webrtcStatus }}</span>
               <span class="live-bar-actions">
                 <button type="button" class="btn btn-secondary" @click="startWebRTC">Connect video</button>
@@ -237,8 +240,8 @@
                 <option value="usb">USB only</option>
                 <option value="sd">SD (/app/data) only</option>
               </select>
-              <label>Stream profile (URL param)</label>
-              <input type="text" v-model="recProfile" />
+              <label>Recording stream</label>
+              <p class="status-line"><code>{{ cameraStreamUrl }}</code> · fixed square camera feed</p>
               <div class="row">
                 <button type="button" class="btn" @click="saveRecordings">Save</button>
                 <button type="button" class="btn" @click="recordNow">Record now</button>
@@ -472,20 +475,8 @@
           <section v-show="tab === 'settings'" class="tab-panel">
             <div class="panel">
               <h2>Camera</h2>
-              <div class="row">
-                <div>
-                  <label>Host</label>
-                  <input type="text" v-model="camHost" />
-                </div>
-                <div>
-                  <label>User</label>
-                  <input type="text" v-model="camUser" />
-                </div>
-                <div>
-                  <label>Password</label>
-                  <input type="password" v-model="camPass" />
-                </div>
-              </div>
+              <p class="status-line">Live preview and recordings use the fixed square camera feed:</p>
+              <p class="status-line"><code>{{ cameraStreamUrl }}</code></p>
               <h2 class="h2-spaced">Quota</h2>
               <label>Monthly quota (GB, 0 = no bar cap)</label>
               <input type="number" v-model.number="quotaGb" step="0.1" min="0" />
@@ -865,10 +856,7 @@
           };
 
           function loadStoredTab() {
-            try {
-              var v = window.sessionStorage && sessionStorage.getItem("km.tab");
-              if (v && ["live", "stream", "rec", "stereo", "settings"].indexOf(v) >= 0) return v;
-            } catch (e) {}
+            // Every newly loaded extension interface opens on the camera feed.
             return "live";
           }
 
@@ -933,9 +921,7 @@
             data: function () {
               return {
                 tab: loadStoredTab(),
-                camHost: "",
-                camUser: "",
-                camPass: "",
+                cameraStreamUrl: "rtsp://192.168.0.142:8554/unicast",
                 ytKey: "",
                 ytChannelUrl: "",
                 ytAutorestart: true,
@@ -961,7 +947,6 @@
                 quotaGb: 100,
                 overheadPct: 3,
                 recStorage: "auto",
-                recProfile: "DefaultFishPond",
                 recEnabled: false,
                 recRecordMin: 1.0,
                 recPauseMin: 2.0,
@@ -1323,9 +1308,7 @@
                 var useStoredDraft = !opts.force;
                 return this.api("GET", "/api/config")
                   .then(function (c) {
-                    self.camHost = c.camera_host || "";
-                    self.camUser = c.camera_user || "";
-                    self.camPass = c.camera_pass || "";
+                    self.cameraStreamUrl = c.camera_stream_url || self.cameraStreamUrl;
                     self.ytKey = c.youtube_stream_key || "";
                     self.ytChannelUrl = c.youtube_channel_url || "";
                     self.ytAutorestart = c.youtube_health_autorestart !== false;
@@ -1341,7 +1324,6 @@
                     self.quotaGb = c.monthly_quota_gb != null ? c.monthly_quota_gb : 100;
                     self.overheadPct = c.bandwidth_overhead_pct != null ? c.bandwidth_overhead_pct : 3;
                     self.recStorage = c.recordings_storage || "auto";
-                    self.recProfile = c.recordings_profile || "DefaultFishPond";
                     var rc = c.recordings_cycle || {};
                     self.recEnabled = !!rc.enabled;
                     // Config stores whole seconds; the UI exposes decimal
@@ -1671,29 +1653,35 @@
                 var self = this;
                 var vid = this.$refs.liveVideo;
                 this.stopWebRTC();
-                if (!window.McmWebRtcLive) {
-                  this.webrtcStatus = "MCM WebRTC helper not loaded.";
-                  return;
-                }
-                this.webrtcStatus = "Connecting to BlueOS camera manager…";
-                this.mcmLive = window.McmWebRtcLive.create(vid, {
-                  onStatus: function (s) {
-                    self.webrtcStatus = String(s || "");
-                  },
-                  onError: function (e) {
-                    self.webrtcStatus = "WebRTC error: " + String(e || "");
-                  },
-                });
-                // Discover producers over MCM signalling (ws://host:6021) only —
-                // avoids a brittle REST hop through Flask→MCM that Firefox
-                // reports as "NetworkError when attempting to fetch resource."
-                this.mcmLive
-                  .connect()
-                  .then(function () {
-                    return self.mcmLive.playPreferredH264(/wailoa|mc800/i);
+                this.webrtcStatus = "Connecting to camera…";
+                this.pc = new RTCPeerConnection({ iceServers: [] });
+                this.pc.addTransceiver("video", { direction: "recvonly" });
+                this.pc.ontrack = function (ev) {
+                  if (vid.srcObject !== ev.streams[0]) vid.srcObject = ev.streams[0];
+                };
+                this.pc
+                  .createOffer()
+                  .then(function (offer) {
+                    return self.pc.setLocalDescription(offer);
                   })
                   .then(function () {
-                    self.webrtcStatus = "Connected (MCM) — waiting for frames…";
+                    return fetch(kmUrl("/go2rtc/api/webrtc?src=livepreview"), {
+                      method: "POST",
+                      body: self.pc.localDescription.sdp,
+                      headers: { "Content-Type": "application/sdp" },
+                    });
+                  })
+                  .then(function (res) {
+                    if (!res.ok) return res.text().then(function (t) {
+                      throw new Error(t || res.statusText);
+                    });
+                    return res.text();
+                  })
+                  .then(function (answerSdp) {
+                    return self.pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+                  })
+                  .then(function () {
+                    self.webrtcStatus = "Connected.";
                     if (vid && vid.play) {
                       var p = vid.play();
                       if (p && p.catch) p.catch(function () {});
@@ -1701,13 +1689,8 @@
                   })
                   .catch(function (e) {
                     var msg = e && e.message ? e.message : String(e);
+                    self.stopWebRTC();
                     self.webrtcStatus = "WebRTC error: " + msg;
-                    if (self.mcmLive) {
-                      try {
-                        self.mcmLive.close();
-                      } catch (e2) {}
-                      self.mcmLive = null;
-                    }
                   });
               },
               stopWebRTC: function () {
@@ -1886,7 +1869,6 @@
                     pause_secs: pauseSecs,
                   },
                   storage: this.recStorage,
-                  profile: String(this.recProfile || "").trim(),
                 }).then(function () {
                   alert("Saved.");
                   self.loadConfig({ force: true });
@@ -1896,7 +1878,6 @@
                 var self = this;
                 this.api("POST", "/api/recordings/config", {
                   storage: this.recStorage,
-                  profile: String(this.recProfile || "").trim(),
                 })
                   .then(function () {
                     return self.api("POST", "/api/recordings/start", {});
@@ -2044,14 +2025,11 @@
               saveSettings: function () {
                 var self = this;
                 var payload = {
-                  camera_host: String(this.camHost || "").trim(),
-                  camera_user: String(this.camUser || "").trim(),
-                  camera_pass: this.camPass,
                   monthly_quota_gb: parseFloat(this.quotaGb) || 0,
                   bandwidth_overhead_pct: parseFloat(this.overheadPct) || 0,
                 };
                 this.api("POST", "/api/config", payload).then(function () {
-                  alert("Saved. Reload page if camera IP changed.");
+                  alert("Saved.");
                   self.loadConfig({ force: true });
                 });
               },
@@ -2160,6 +2138,7 @@
                 self.pollLink();
                 self.pollSolar();
                 self.pollYoutubeApi();
+                self.startWebRTC();
               });
               setInterval(function () {
                 self.pollStream();

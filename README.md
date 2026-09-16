@@ -1,6 +1,6 @@
 # Wailoa Cam — BlueOS extension
 
-BlueOS extension for a fixed-focus Axis camera (fixed IP **192.168.20.20** by default): full-screen WebRTC live preview (`livepreview` 720p H.264 via **go2rtc**), scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycle (default `DefaultFishPond` H.265 profile, fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
+BlueOS extension for the Wailoa camera system: full-screen WebRTC live preview of the fixed square feed at **`rtsp://192.168.0.142:8554/unicast`** via **go2rtc**, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycles (fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
 
 ## Reference
 
@@ -98,9 +98,9 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 
 ### Camera
 
-1. Create stream profile **`livepreview`**: 720p H.264 (or use **Create livepreview profile** in the UI / `POST /api/camera/ensure-livepreview`).
-2. **DefaultFishPond** is set to H.265 1920×1080 @ 15 fps on boot / via **Apply DefaultFishpond** in Settings.
-3. **`youtubelive`** is auto-provisioned on boot (or via **Apply youtubelive** in Settings / `POST /api/camera/ensure-youtubelive`): H.264 1920×1080 @ 30 fps, MBR cap 4500 kbps, 2 s GOP, compression=20. This is what the YouTube path streams. On older Axis firmwares the StreamProfile slot groups aren't pre-allocated, so the extension uses VAPIX `action=add` then `action=update` to populate the slot.
+- Live preview and mono recordings always use **`rtsp://192.168.0.142:8554/unicast`**. The endpoint is fixed in the extension and displayed read-only on the Live, Recordings, and Settings tabs.
+- The Live tab opens by default and connects to this feed automatically through go2rtc.
+- The separate Axis **`youtubelive`** profile remains the YouTube ingest source.
 
 ### YouTube
 

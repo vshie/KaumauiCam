@@ -382,6 +382,16 @@ button.btn-danger {
   flex: 1 1 auto;
   min-height: 0;
   background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.live-frame {
+  height: 100%;
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
 }
 
 .live-stage video {
@@ -412,6 +422,13 @@ button.btn-danger {
   white-space: nowrap;
 }
 
+.live-stream-url {
+  flex: 0 1 auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
 .live-bar-actions {
   flex: 0 0 auto;
   display: flex;
@@ -433,6 +450,12 @@ button.btn-danger {
 
   .live-bar {
     padding: 1rem 2rem;
+  }
+}
+
+@media (max-width: 760px) {
+  .live-stream-url {
+    display: none;
   }
 }
 

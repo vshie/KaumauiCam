@@ -58,6 +58,10 @@ RECORDER_TAIL_GUARD_SECS = 30
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
 MCM_URL = os.environ.get("MCM_URL", "http://127.0.0.1:6020")
+# The Wailoa camera is a fixed installation. Its RTSP endpoint is intentionally
+# not configurable: live preview and mono recordings must always use the same
+# known-good square stream.
+CAMERA_RTSP_URL = "rtsp://192.168.0.142:8554/unicast"
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
 
@@ -386,9 +390,8 @@ def _apply_boot() -> None:
     except Exception as e:
         logger.warning("boot youtubelive profile: %s", e)
     try:
-        rtsp = _camera().rtsp_url("livepreview")
-        logger.info("boot livepreview RTSP: %s", _redact_rtsp(rtsp))
-        render_config(rtsp)
+        logger.info("boot livepreview RTSP: %s", CAMERA_RTSP_URL)
+        render_config(CAMERA_RTSP_URL)
         go2rtc_sup.start()
     except Exception as e:
         logger.warning("boot go2rtc: %s", e)
@@ -399,7 +402,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.1"
+_EXTENSION_VERSION = "0.4.2"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -809,10 +812,7 @@ def _scheduler_loop() -> None:
                         time.sleep(5)
                         continue
                     _recording_error = None
-                    cam = _camera()
-                    prof = cfg.get("recordings_profile", "DefaultFishPond")
-                    rtsp = cam.rtsp_url(prof)
-                    if not recorder.start(rtsp, dest):
+                    if not recorder.start(CAMERA_RTSP_URL, dest):
                         _recording_error = "Recorder failed to start"
             else:
                 if recorder.is_running():
@@ -953,18 +953,11 @@ def api_mcm_streams():
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        return jsonify(cfgmod.load())
+        out = cfgmod.load()
+        out["camera_stream_url"] = CAMERA_RTSP_URL
+        return jsonify(out)
     data = request.get_json(force=True, silent=True) or {}
     out = cfgmod.update(data)
-    if any(k in data for k in ("camera_host", "camera_user", "camera_pass")):
-        try:
-            rtsp = _camera().rtsp_url("livepreview")
-            logger.info("go2rtc reload RTSP: %s", _redact_rtsp(rtsp))
-            render_config(rtsp)
-            go2rtc_sup.stop()
-            go2rtc_sup.start()
-        except Exception as e:
-            logger.warning("go2rtc reload after config: %s", e)
     # Wake the YouTube health monitor when channel-URL config changes so
     # the operator gets a fresh live/not-live readout within ~1s of
     # saving rather than waiting up to a full poll interval.
@@ -1347,10 +1340,11 @@ def solar_poke():
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
 def ensure_livepreview():
     try:
-        cam = _camera()
-        ok, msg = cam.ensure_livepreview_profile()
-        render_config(cam.rtsp_url("livepreview"))
-        return jsonify({"ok": ok, "message": msg})
+        render_config(CAMERA_RTSP_URL)
+        return jsonify({
+            "ok": True,
+            "message": f"Live preview uses fixed stream {CAMERA_RTSP_URL}",
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -1392,7 +1386,7 @@ def rec_config():
                 "cycle": cycle,
                 "preview": recording_preview(cycle),
                 "storage": cfg.get("recordings_storage"),
-                "profile": cfg.get("recordings_profile"),
+                "stream_url": CAMERA_RTSP_URL,
             }
         )
     j = request.get_json(force=True, silent=True) or {}
@@ -1405,15 +1399,13 @@ def rec_config():
         logger.info("recordings config: dropping legacy 'schedule' key from POST body")
     if "storage" in j:
         patch["recordings_storage"] = j["storage"]
-    if "profile" in j:
-        patch["recordings_profile"] = j["profile"]
     updated = cfgmod.update(patch)
     return jsonify(
         {
             "cycle": updated.get("recordings_cycle"),
             "preview": recording_preview(updated.get("recordings_cycle") or {}),
             "storage": updated.get("recordings_storage"),
-            "profile": updated.get("recordings_profile"),
+            "stream_url": CAMERA_RTSP_URL,
         }
     )
 
@@ -1431,10 +1423,7 @@ def rec_start():
         return jsonify({"error": msg}), 400
     with _state_lock:
         _recording_force = True
-    cam = _camera()
-    prof = cfg.get("recordings_profile", "DefaultFishPond")
-    rtsp = cam.rtsp_url(prof)
-    if recorder.start(rtsp, dest):
+    if recorder.start(CAMERA_RTSP_URL, dest):
         _recording_error = None
         return jsonify({"ok": True, "dest": dest, "label": label})
     return jsonify({"error": "start failed"}), 500
@@ -1460,7 +1449,13 @@ def rec_status():
     except Exception as e:
         dest, label = "", str(e)
     st = recorder.status()
-    st.update({"dest": dest, "label": label, "error": re, "force": rf})
+    st.update({
+        "dest": dest,
+        "label": label,
+        "error": re,
+        "force": rf,
+        "stream_url": CAMERA_RTSP_URL,
+    })
     return jsonify(st)
 
 
