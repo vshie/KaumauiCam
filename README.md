@@ -1,6 +1,6 @@
 # Wailoa Cam — BlueOS extension
 
-BlueOS extension for the Wailoa camera system: full-screen WebRTC live preview of the fixed square feed at **`rtsp://192.168.0.142:8554/unicast`** via **go2rtc**, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycles (fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
+BlueOS extension for the Wailoa camera system: full-screen live preview of the fixed square feed at **`rtsp://192.168.0.142:8554/unicast`**, remuxed to MP4 by **go2rtc** and played automatically on page load, scheduled **YouTube Live** (H.264 RTMP, bandwidth meter with SQLite persistence), and daytime **MP4** recording cycles (fixed 07:45 AM – 6:00 PM HST record/pause loop) to USB or SD.
 
 ## Reference
 
@@ -99,7 +99,7 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 ### Camera
 
 - Live preview and mono recordings always use **`rtsp://192.168.0.142:8554/unicast`**. The endpoint is fixed in the extension and displayed read-only on the Live, Recordings, and Settings tabs.
-- The Live tab opens by default and connects to this feed automatically through go2rtc.
+- The Live tab opens by default and starts playing on its own — no connect step. The browser reads go2rtc's fragmented-MP4 output (`/go2rtc/api/stream.mp4?src=livepreview`) straight into a `<video>` element, so there is no WebRTC signalling to negotiate. A watchdog reconnects every 5 s while the feed is down and whenever playback flat-lines for 15 s.
 - The separate Axis **`youtubelive`** profile remains the YouTube ingest source.
 
 ### YouTube
@@ -185,10 +185,10 @@ git push -u origin main
 | GET | `/api/solar/download` | Download `solar.csv` (cumulative, header + timestamp_iso first column) |
 | POST | `/api/solar/delete` | Wipe `solar.csv` (logging continues, next row appears at the next poll) |
 | POST | `/api/solar/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
-| POST | `/api/camera/ensure-livepreview` | Create profile on camera |
+| POST | `/api/camera/ensure-livepreview` | Re-render the go2rtc config for the fixed camera stream |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |
-| * | `/go2rtc/<path>` | Reverse proxy to go2rtc (WebRTC signaling) |
+| * | `/go2rtc/<path>` | Reverse proxy to go2rtc (serves the live MP4 stream) |
 
 ## License
 

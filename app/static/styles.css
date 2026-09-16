@@ -422,11 +422,15 @@ button.btn-danger {
   white-space: nowrap;
 }
 
-.live-stream-url {
+/* The stream address is fixed, so it reads as a label rather than a state
+   badge: keep it on one line and let the status text take the slack. */
+.live-bar .badge {
   flex: 0 1 auto;
-  color: var(--muted);
-  font-size: 0.82rem;
+  text-transform: none;
+  letter-spacing: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .live-bar-actions {
@@ -454,7 +458,7 @@ button.btn-danger {
 }
 
 @media (max-width: 760px) {
-  .live-stream-url {
+  .live-bar .badge {
     display: none;
   }
 }

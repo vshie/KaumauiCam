@@ -57,7 +57,6 @@ RECORDER_TAIL_GUARD_SECS = 30
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
-MCM_URL = os.environ.get("MCM_URL", "http://127.0.0.1:6020")
 # The Wailoa camera is a fixed installation. Its RTSP endpoint is intentionally
 # not configurable: live preview and mono recordings must always use the same
 # known-good square stream.
@@ -895,62 +894,6 @@ def go2rtc_proxy(path: str):
 @app.route("/api/health")
 def health():
     return jsonify({"ok": True, "service": "wailoa-cam"})
-
-
-@app.route("/api/mcm/streams", methods=["GET"])
-def api_mcm_streams():
-    """BlueOS camera-manager streams for MCM WebRTC live preview.
-
-    Same shape as DropCam ``GET /streams``: ``stream_id``, ``name``,
-    ``rtsp_url``, ``encode``, ``running`` — enough for ``mcm_webrtc_live.js``
-    to match a signalling producer on ``ws://<host>:6021``.
-    """
-    try:
-        r = requests.get(f"{MCM_URL}/streams", timeout=8)
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        logger.warning("MCM /streams: %s", e)
-        return jsonify({"ok": False, "error": str(e), "streams": []}), 502
-
-    out = []
-    for s in raw or []:
-        try:
-            sid = s.get("id")
-            vas = s.get("video_and_stream") or {}
-            name = vas.get("name") or "stream"
-            info = vas.get("stream_information") or {}
-            cfg = info.get("configuration") or {}
-            if cfg.get("type") != "video":
-                continue
-            endpoints = [ep for ep in (info.get("endpoints") or []) if isinstance(ep, str)]
-            rtsp = None
-            for ep in endpoints:
-                if ep.lower().startswith("rtsp://"):
-                    rtsp = re.sub(
-                        r"^(rtsp://)([^/:]+)(:\d+)?",
-                        r"\g<1>127.0.0.1\3",
-                        ep,
-                        count=1,
-                        flags=re.I,
-                    )
-                    break
-            # UDP-only streams still publish a WebRTC producer; keep them.
-            if not sid:
-                continue
-            out.append(
-                {
-                    "stream_id": str(sid),
-                    "name": name,
-                    "rtsp_url": rtsp or (endpoints[0] if endpoints else ""),
-                    "encode": (cfg.get("encode") or "").upper(),
-                    "running": bool(s.get("running")),
-                }
-            )
-        except Exception as parse_err:
-            logger.debug("MCM stream skip: %s", parse_err)
-            continue
-    return jsonify({"ok": True, "streams": out})
 
 
 @app.route("/api/config", methods=["GET", "POST"])

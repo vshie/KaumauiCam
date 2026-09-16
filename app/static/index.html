@@ -71,12 +71,10 @@
               </div>
             </div>
             <div class="live-bar">
-              <span class="badge">WebRTC · go2rtc</span>
-              <code class="live-stream-url">{{ cameraStreamUrl }}</code>
-              <span class="live-bar-status">{{ webrtcStatus }}</span>
+              <span class="badge">{{ cameraStreamUrl }}</span>
+              <span class="live-bar-status">{{ liveStatus }}</span>
               <span class="live-bar-actions">
-                <button type="button" class="btn btn-secondary" @click="startWebRTC">Connect video</button>
-                <button type="button" class="btn btn-secondary" @click="stopWebRTC">Disconnect</button>
+                <button type="button" class="btn btn-secondary" @click="startLive">Reload video</button>
               </span>
             </div>
           </section>
@@ -622,25 +620,16 @@
       (function () {
         function loadVueThenBoot() {
           var base = (window.__KM_PREFIX || "/").replace(/\/?$/, "/");
-          var mcm = document.createElement("script");
-          mcm.src = base + "static/mcm_webrtc_live.js";
-          mcm.onload = function () {
-            var s = document.createElement("script");
-            s.src = base + "static/vendor/vue.global.prod.js";
-            s.onload = function () {
-              bootWailoaVue();
-            };
-            s.onerror = function () {
-              document.getElementById("app").innerHTML =
-                '<p style="padding:1rem;color:#c00">Failed to load Vue. Rebuild the Docker image (vendor/vue.global.prod.js).</p>';
-            };
-            document.body.appendChild(s);
+          var s = document.createElement("script");
+          s.src = base + "static/vendor/vue.global.prod.js";
+          s.onload = function () {
+            bootWailoaVue();
           };
-          mcm.onerror = function () {
+          s.onerror = function () {
             document.getElementById("app").innerHTML =
-              '<p style="padding:1rem;color:#c00">Failed to load MCM WebRTC helper (static/mcm_webrtc_live.js).</p>';
+              '<p style="padding:1rem;color:#c00">Failed to load Vue. Rebuild the Docker image (vendor/vue.global.prod.js).</p>';
           };
-          document.body.appendChild(mcm);
+          document.body.appendChild(s);
         }
         function bootWailoaVue() {
           var Vue = window.Vue;
@@ -953,8 +942,10 @@
                 draftYt: cloneSched({}),
                 bannerText: "",
                 bannerClass: "",
-                webrtcStatus: "Disconnected.",
-                mcmLive: null,
+                liveStatus: "Connecting…",
+                liveRetryTimer: null,
+                liveLastTime: -1,
+                liveLastProgressTs: 0,
                 bwText: "—",
                 bwBarPct: 0,
                 ytStderr: "Idle.",
@@ -1649,71 +1640,72 @@
                   })
                   .catch(function () {});
               },
-              startWebRTC: function () {
+              startLive: function () {
+                // go2rtc remuxes the camera's RTSP into fragmented MP4, which
+                // the <video> element plays on its own -- no signalling
+                // handshake, so the feed comes up as soon as the page loads.
                 var self = this;
                 var vid = this.$refs.liveVideo;
-                this.stopWebRTC();
-                this.webrtcStatus = "Connecting to camera…";
-                this.pc = new RTCPeerConnection({ iceServers: [] });
-                this.pc.addTransceiver("video", { direction: "recvonly" });
-                this.pc.ontrack = function (ev) {
-                  if (vid.srcObject !== ev.streams[0]) vid.srcObject = ev.streams[0];
-                };
-                this.pc
-                  .createOffer()
-                  .then(function (offer) {
-                    return self.pc.setLocalDescription(offer);
-                  })
-                  .then(function () {
-                    return fetch(kmUrl("/go2rtc/api/webrtc?src=livepreview"), {
-                      method: "POST",
-                      body: self.pc.localDescription.sdp,
-                      headers: { "Content-Type": "application/sdp" },
-                    });
-                  })
-                  .then(function (res) {
-                    if (!res.ok) return res.text().then(function (t) {
-                      throw new Error(t || res.statusText);
-                    });
-                    return res.text();
-                  })
-                  .then(function (answerSdp) {
-                    return self.pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-                  })
-                  .then(function () {
-                    self.webrtcStatus = "Connected.";
-                    if (vid && vid.play) {
-                      var p = vid.play();
-                      if (p && p.catch) p.catch(function () {});
-                    }
-                  })
-                  .catch(function (e) {
-                    var msg = e && e.message ? e.message : String(e);
-                    self.stopWebRTC();
-                    self.webrtcStatus = "WebRTC error: " + msg;
+                if (!vid) return;
+                this.stopLive();
+                this.liveStatus = "Connecting…";
+                // The query stamp keeps a reconnect from replaying a cached
+                // response instead of opening a fresh stream.
+                vid.src = kmUrl("go2rtc/api/stream.mp4?src=livepreview&t=" + Date.now());
+                this.liveLastTime = -1;
+                this.liveLastProgressTs = Date.now();
+                var p = vid.play();
+                if (p && p.catch) {
+                  p.catch(function () {
+                    self.scheduleLiveRetry();
                   });
+                }
               },
-              stopWebRTC: function () {
+              stopLive: function () {
+                this.clearLiveRetry();
                 var vid = this.$refs.liveVideo;
-                if (this.mcmLive) {
-                  try {
-                    this.mcmLive.close();
-                  } catch (e) {}
-                  this.mcmLive = null;
+                if (!vid) return;
+                try {
+                  vid.pause();
+                } catch (e) {}
+                vid.removeAttribute("src");
+                try {
+                  vid.load();
+                } catch (e2) {}
+              },
+              clearLiveRetry: function () {
+                if (this.liveRetryTimer) clearTimeout(this.liveRetryTimer);
+                this.liveRetryTimer = null;
+              },
+              scheduleLiveRetry: function () {
+                // The camera and the Pi share a power cycle, so the stream is
+                // expected to be missing for a while after boot and during
+                // outages. Keep retrying quietly rather than parking on an
+                // error the operator would have to clear by hand.
+                var self = this;
+                if (this.liveRetryTimer || this.tab !== "live") return;
+                this.liveStatus = "Camera stream unavailable — retrying…";
+                this.liveRetryTimer = setTimeout(function () {
+                  self.liveRetryTimer = null;
+                  self.startLive();
+                }, 5000);
+              },
+              checkLiveProgress: function () {
+                // A dropped RTSP source can leave the MP4 response open with
+                // no further frames, which fires no media events at all. Watch
+                // the playback clock and reconnect when it flat-lines.
+                if (this.tab !== "live") return;
+                var vid = this.$refs.liveVideo;
+                if (!vid || !vid.src || this.liveRetryTimer) return;
+                var t = vid.currentTime;
+                if (t !== this.liveLastTime) {
+                  this.liveLastTime = t;
+                  this.liveLastProgressTs = Date.now();
+                  return;
                 }
-                if (this.pc) {
-                  try {
-                    this.pc.close();
-                  } catch (e2) {}
-                  this.pc = null;
+                if (Date.now() - this.liveLastProgressTs > 15000) {
+                  this.scheduleLiveRetry();
                 }
-                if (vid && vid.srcObject) {
-                  vid.srcObject.getTracks().forEach(function (t) {
-                    t.stop();
-                  });
-                  vid.srcObject = null;
-                }
-                this.webrtcStatus = "Disconnected.";
               },
               saveYoutube: function () {
                 var self = this;
@@ -2120,6 +2112,8 @@
                 try {
                   window.sessionStorage && sessionStorage.setItem("km.tab", v);
                 } catch (e) {}
+                if (v === "live") this.startLive();
+                else this.stopLive();
               },
               draftYt: {
                 handler: function (v) {
@@ -2130,6 +2124,28 @@
             },
             mounted: function () {
               var self = this;
+              var vid = this.$refs.liveVideo;
+              if (vid) {
+                vid.addEventListener("playing", function () {
+                  self.clearLiveRetry();
+                  self.liveStatus = "Live.";
+                });
+                vid.addEventListener("waiting", function () {
+                  self.liveStatus = "Buffering…";
+                });
+                vid.addEventListener("error", function () {
+                  self.scheduleLiveRetry();
+                });
+                vid.addEventListener("ended", function () {
+                  self.scheduleLiveRetry();
+                });
+              }
+              // Start the feed before the config round-trip so the wall
+              // display shows video as soon as the page is up.
+              if (this.tab === "live") this.startLive();
+              setInterval(function () {
+                self.checkLiveProgress();
+              }, 5000);
               this.loadConfig().then(function () {
                 self.pollStream();
                 self.pollRec();
@@ -2138,7 +2154,6 @@
                 self.pollLink();
                 self.pollSolar();
                 self.pollYoutubeApi();
-                self.startWebRTC();
               });
               setInterval(function () {
                 self.pollStream();
