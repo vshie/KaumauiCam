@@ -49,7 +49,7 @@
 }
 
 html {
-  min-height: 100%;
+  height: 100%;
 }
 
 body {
@@ -58,13 +58,24 @@ body {
   font-size: 15px;
   line-height: 1.45;
   color: var(--text);
+  height: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background:
     radial-gradient(1200px 600px at 10% -10%, rgba(14, 165, 233, 0.18), transparent 55%),
     radial-gradient(900px 500px at 100% 0%, rgba(45, 212, 191, 0.12), transparent 50%),
     linear-gradient(165deg, var(--bg-deep) 0%, var(--bg-mid) 45%, #07121c 100%);
+}
+
+#app,
+.vue-root {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
 }
 
 .site-header {
@@ -161,12 +172,55 @@ main {
   padding: 1.25rem;
   max-width: 1180px;
   margin: 0 auto;
-  flex: 1 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.vue-root.is-live main {
+  /* Live preview should use the full iframe/window, not the 1180px card cap.
+     On 4K that cap left a short 16:9 player with empty dark bands above/below. */
+  max-width: none;
+  padding: 0.85rem 1rem 1rem;
 }
 
 main .tab-panel {
   animation: fadeIn 0.22s ease;
+}
+
+.tab-panel-live {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+@media (min-width: 900px) {
+  .live-grid > .panel:not(.live-preview) {
+    align-self: start;
+  }
+}
+
+@media (max-width: 899px) {
+  .live-grid {
+    grid-template-rows: minmax(12rem, 1fr) auto;
+  }
+}
+
+.live-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }
 
 @keyframes fadeIn {
@@ -345,21 +399,53 @@ button.btn-danger {
   box-shadow: 0 4px 14px rgba(225, 29, 72, 0.35);
 }
 
-.video-wrap {
+.video-stage {
+  flex: 1 1 auto;
+  min-height: 12rem;
   position: relative;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: radial-gradient(circle at 50% 50%, #0c1924 0%, #020617 100%);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  aspect-ratio: 16 / 9;
-  max-height: 70vh;
   border: 1px solid var(--border);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
+.live-preview > h2,
+.live-preview > .row,
+.live-preview > .status-line {
+  flex-shrink: 0;
+}
+
+.video-wrap {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  background: #020617;
+  overflow: hidden;
+}
+
+@supports (width: 1cqh) {
+  .video-wrap {
+    /* Largest 16:9 rectangle that fits the black stage — fills height on wide
+       4K windows instead of leaving letterbox bands from the old 70vh cap. */
+    width: min(100cqw, calc(100cqh * 16 / 9));
+    height: min(100cqh, calc(100cqw * 9 / 16));
+  }
+}
+
 .video-wrap video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background: #020617;
 }
 
 .ptz-pad {
@@ -919,9 +1005,9 @@ tr.sess-stopped td { color: var(--muted); }
   max-height: 42px;
 }
 
-.footer-img-hui {
-  max-height: 48px;
-  max-width: min(320px, 85vw);
+.footer-img-seagrant {
+  max-height: 56px;
+  max-width: min(240px, 85vw);
 }
 
 .footer-logo:hover .footer-img {
