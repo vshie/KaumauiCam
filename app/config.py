@@ -136,15 +136,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "youtube_api_mode": False,
     "youtube_broadcast_title_template": "Wailoa Cam - {date}",
     "youtube_broadcast_privacy": "public",
-    # Victron solar logger (see app/solar.py). Polls the on-board
-    # ESPHome device (Fishpond) at ``solar_host`` every
-    # ``solar_interval_secs`` and appends one row to /app/data/solar.csv.
-    # ``timestamp_iso`` is always the first column; the file is
-    # cumulative (append-only, no rotation) and downloadable / deletable
-    # from the Settings page.
-    "solar_enabled": True,
-    "solar_host": "192.168.20.66",
-    "solar_interval_secs": 60.0,
+    # Orca camera logger (see app/orca.py). Polls
+    # ``http://192.168.0.142:5000/data`` every ``orca_interval_secs`` and
+    # appends one row to /app/data/orca.csv. Column 1 is always
+    # ``timestamp_iso``; remaining columns are taken from the camera JSON
+    # (flattened). The file is cumulative and downloadable from Settings.
+    "orca_enabled": True,
+    "orca_url": "http://192.168.0.142:5000/data",
+    "orca_interval_secs": 60.0,
 }
 
 CONFIG_PATH = os.environ.get("WAILOA_CONFIG", "/app/data/config.json")
@@ -198,6 +197,9 @@ def load() -> Dict[str, Any]:
                 merged["recordings_cycle"]
             )
         merged.pop("recordings_schedule", None)
+        # Victron/ESPHome logging was replaced by the Orca camera poller.
+        for legacy in ("solar_enabled", "solar_host", "solar_interval_secs"):
+            merged.pop(legacy, None)
         merged["stereo_cycle"] = normalize_stereo_cycle(
             {**merged["stereo_cycle"], **(data.get("stereo_cycle") or {})}
         )
@@ -242,5 +244,7 @@ def update(partial: Dict[str, Any]) -> Dict[str, Any]:
     # Guarantee the legacy key never leaks back onto disk via a
     # partial update (paranoia; ``load()`` already strips it).
     cfg.pop("recordings_schedule", None)
+    for legacy in ("solar_enabled", "solar_host", "solar_interval_secs"):
+        cfg.pop(legacy, None)
     save(cfg)
     return cfg

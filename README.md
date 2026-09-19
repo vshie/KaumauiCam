@@ -122,24 +122,11 @@ The "kickoff" timer is per *broadcast attempt*, not per ffmpeg session — ffmpe
 - **USB:** first removable **`sd*`** partition mounted at `/mnt/usb/WailoaCam/recordings`.
 - **SD fallback:** `/app/data/recordings` — new clips **blocked** if free space is under **10 GB** on that filesystem.
 
-### Solar logging (Victron MPPT via on-board ESPHome)
+### Orca camera logging
 
-The on-board ESPHome device (default **Fishpond at 192.168.20.66**) exposes a Victron BlueSolar MPPT charger and a couple of relays. The extension polls its per-entity REST API every `solar_interval_secs` (default 60s) and appends one row to **`/app/data/solar.csv`**. The file is **cumulative** (append-only, no rotation) — the operator downloads or deletes it from **Settings → Solar logging (Victron)**.
+The Wailoa camera exposes a JSON snapshot at **`http://192.168.0.142:5000/data`**. The extension polls that URL every `orca_interval_secs` (default 60s) and appends one row to **`/app/data/orca.csv`**. The file is **cumulative** (append-only, no rotation) — the operator downloads or deletes it from **Settings → Orca camera logging**.
 
-CSV schema (header is written on first run; `timestamp_iso` is always column 1):
-
-```
-timestamp_iso, timestamp_epoch,
-battery_voltage_v, battery_current_a, battery_temperature_c,
-pv_voltage_v, pv_power_w,
-load_output, load_current_a,
-yield_today_wh, yield_total_wh, yield_yesterday_wh,
-max_power_today_w, max_power_yesterday_w,
-charging_mode, mppt_tracking, error,
-device_type, serial, firmware
-```
-
-Numeric columns are stripped of their unit suffix (e.g. `26.83`, not `26.830 V`) so Excel / pandas parse them as numbers; the unit lives in the column name. Missing entities are written as empty cells rather than aborting the whole row, so a brief network blip on one sensor doesn't blank out the others. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/wailoacam/solar.csv` on the host) so it survives container rebuilds.
+CSV schema: `timestamp_iso` is always column 1, `timestamp_epoch` is column 2, then one column per flattened field from the camera JSON, and `payload_json` last (the raw body, so newly added camera keys are never lost). Nested objects become `parent_child` columns. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/wailoacam/orca.csv` on the host) so it survives container rebuilds.
 
 ## Push this repo (you deploy)
 
@@ -180,11 +167,11 @@ git push -u origin main
 | POST | `/api/youtube/oauth/disconnect` | Clear tokens + today's broadcast state; disable API mode |
 | GET | `/api/youtube/broadcast/status` | Today's managed broadcast (id, watch URL, lifecycle, stream health) |
 | GET | `/api/storage` | USB mount, used / total / free bytes when mounted, plus SD free GB |
-| GET | `/api/solar/status` | Solar logger status: enabled, host, interval, last sample, file size, row count, last error, 5-row preview |
-| GET | `/api/solar/sample` | One-shot live poll of the ESPHome device (optional `?host=` override) |
-| GET | `/api/solar/download` | Download `solar.csv` (cumulative, header + timestamp_iso first column) |
-| POST | `/api/solar/delete` | Wipe `solar.csv` (logging continues, next row appears at the next poll) |
-| POST | `/api/solar/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
+| GET | `/api/orca/status` | Orca logger status: enabled, URL, interval, last sample, file size, row count, last error, 5-row preview |
+| GET | `/api/orca/sample` | One-shot live poll of the camera `/data` endpoint (optional `?url=` override) |
+| GET | `/api/orca/download` | Download `orca.csv` (cumulative, header + timestamp_iso first column) |
+| POST | `/api/orca/delete` | Wipe `orca.csv` (logging continues, next row appears at the next poll) |
+| POST | `/api/orca/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
 | POST | `/api/camera/ensure-livepreview` | Re-render the go2rtc config for the fixed camera stream |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |

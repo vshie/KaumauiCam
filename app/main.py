@@ -18,7 +18,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, send_f
 import bandwidth
 import config as cfgmod
 import link_uptime
-import solar
+import orca
 import youtube_api
 import youtube_monitor
 from camera import AxisCamera
@@ -404,7 +404,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.4"
+_EXTENSION_VERSION = "0.4.5"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -1217,69 +1217,62 @@ def storage():
     return jsonify(u)
 
 
-@app.route("/api/solar/status", methods=["GET"])
-def solar_status():
-    """Solar logger snapshot: enabled flag, host, interval, last sample,
-    file size / row count, last error. Polled by the Settings page so
-    the operator sees logging is alive without downloading the CSV."""
+@app.route("/api/orca/status", methods=["GET"])
+def orca_status():
+    """Orca camera logger snapshot: enabled flag, URL, interval, last
+    sample, file size / row count, last error. Polled by the Settings
+    page so the operator sees logging is alive without downloading the CSV."""
     try:
-        st = solar.status()
+        st = orca.status()
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     try:
-        st["preview"] = solar.csv_preview(max_rows=5)
+        st["preview"] = orca.csv_preview(max_rows=5)
     except Exception:
         st["preview"] = ""
     return jsonify(st)
 
 
-@app.route("/api/solar/sample", methods=["GET"])
-def solar_sample():
-    """One-shot live poll of the ESPHome device, independent of the
-    background loop. Optional ``?host=`` overrides the configured host
-    so the operator can test a different IP from the Settings page
-    before saving."""
-    host = request.args.get("host") or None
+@app.route("/api/orca/sample", methods=["GET"])
+def orca_sample():
+    """One-shot live poll of the camera /data endpoint. Optional
+    ``?url=`` overrides the configured URL so the operator can test a
+    different address from Settings before saving."""
+    url = request.args.get("url") or None
     try:
-        return jsonify(solar.fetch_live(host))
+        return jsonify(orca.fetch_live(url))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/solar/download", methods=["GET"])
-def solar_download():
-    """Send the cumulative CSV. 404 if the file doesn't exist yet
-    (logger disabled, or just deleted, or the device hasn't been
-    reachable for the very first poll)."""
-    path = solar.csv_path()
+@app.route("/api/orca/download", methods=["GET"])
+def orca_download():
+    """Send the cumulative CSV. 404 if the file doesn't exist yet."""
+    path = orca.csv_path()
     if not os.path.isfile(path):
         return jsonify({"error": "no csv yet"}), 404
     return send_file(
         path,
         as_attachment=True,
-        download_name="solar.csv",
+        download_name="orca.csv",
         mimetype="text/csv",
     )
 
 
-@app.route("/api/solar/delete", methods=["POST"])
-def solar_delete():
-    """Wipe the CSV. Resets in-memory row count + last sample so the
-    Settings panel reflects the wipe immediately. Logging continues; a
-    fresh row appears at the next poll cycle (within
-    ``solar_interval_secs``)."""
-    res = solar.delete_csv()
+@app.route("/api/orca/delete", methods=["POST"])
+def orca_delete():
+    """Wipe the CSV. Logging continues; a fresh row appears at the next
+    poll cycle (within ``orca_interval_secs``)."""
+    res = orca.delete_csv()
     if not res.get("ok"):
         return jsonify(res), 500
     return jsonify(res)
 
 
-@app.route("/api/solar/poke", methods=["POST"])
-def solar_poke():
-    """Wake the logger thread immediately. The Settings page calls this
-    after Save so the next CSV row reflects the new host/interval
-    within ~1s rather than up to ``solar_interval_secs``."""
-    solar.poke()
+@app.route("/api/orca/poke", methods=["POST"])
+def orca_poke():
+    """Wake the logger thread immediately after Settings save."""
+    orca.poke()
     return jsonify({"ok": True})
 
 
@@ -1886,14 +1879,12 @@ def main() -> None:
         )
     except Exception:
         logger.exception("youtube_monitor.start failed")
-    # Victron solar logger. Reads the few keys it needs (host, interval,
-    # enabled flag) on every cycle via this lambda, so config edits on
-    # the Settings page take effect at the next poll without restarting
-    # the thread.
+    # Orca camera logger. Reads URL / interval / enabled on every cycle
+    # via this lambda, so Settings edits take effect at the next poll.
     try:
-        solar.start(get_cfg=cfgmod.load)
+        orca.start(get_cfg=cfgmod.load)
     except Exception:
-        logger.exception("solar.start failed")
+        logger.exception("orca.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

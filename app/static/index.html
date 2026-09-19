@@ -490,42 +490,42 @@
             </div>
             <div class="panel">
               <h2>
-                Solar logging (Victron)
-                <span class="badge" :class="solarBadgeClass">{{ solarBadgeText }}</span>
+                Orca camera logging
+                <span class="badge" :class="orcaBadgeClass">{{ orcaBadgeText }}</span>
               </h2>
-              <p class="status-line">Polls the on-board ESPHome device (Fishpond) at the IP below and appends one row per cycle to <code>/app/data/solar.csv</code>. The file is cumulative (append-only), and <code>timestamp_iso</code> is the first column.</p>
+              <p class="status-line">Polls the camera JSON endpoint below and appends one row per cycle to <code>/app/data/orca.csv</code>. Columns come from whatever the camera returns (flattened); <code>timestamp_iso</code> is always first and the raw body is kept in <code>payload_json</code>.</p>
               <label class="ck-row">
-                <input type="checkbox" v-model="solarEnabled" />
-                Enable solar logging
+                <input type="checkbox" v-model="orcaEnabled" />
+                Enable Orca logging
               </label>
               <div class="row">
                 <div>
-                  <label>ESPHome host (IP or hostname)</label>
-                  <input type="text" v-model="solarHost" placeholder="192.168.20.66" />
+                  <label>Data URL</label>
+                  <input type="text" v-model="orcaUrl" placeholder="http://192.168.0.142:5000/data" />
                 </div>
                 <div>
                   <label>Polling interval (seconds)</label>
-                  <input type="number" v-model.number="solarInterval" min="5" max="3600" step="5" />
+                  <input type="number" v-model.number="orcaInterval" min="5" max="3600" step="5" />
                 </div>
               </div>
               <div class="row row-actions-spaced">
-                <button type="button" class="btn" @click="saveSolar">Save</button>
-                <button type="button" class="btn btn-secondary" @click="refreshSolarLive">Refresh live readings</button>
-                <a class="btn btn-secondary" :href="kmUrl('/api/solar/download')" :class="{ 'is-disabled': !solarStatus.csv_size_bytes }">Download CSV</a>
-                <button type="button" class="btn btn-danger" :disabled="!solarStatus.csv_size_bytes" @click="deleteSolarCsv">Delete CSV</button>
+                <button type="button" class="btn" @click="saveOrca">Save</button>
+                <button type="button" class="btn btn-secondary" @click="refreshOrcaLive">Refresh live readings</button>
+                <a class="btn btn-secondary" :href="kmUrl('/api/orca/download')" :class="{ 'is-disabled': !orcaStatus.csv_size_bytes }">Download CSV</a>
+                <button type="button" class="btn btn-danger" :disabled="!orcaStatus.csv_size_bytes" @click="deleteOrcaCsv">Delete CSV</button>
               </div>
-              <p class="status-line">{{ solarStatusLine }}</p>
-              <p class="status-line err" v-if="solarStatus.last_error">{{ solarStatus.last_error }}</p>
+              <p class="status-line">{{ orcaStatusLine }}</p>
+              <p class="status-line err" v-if="orcaStatus.last_error">{{ orcaStatus.last_error }}</p>
               <h2 class="h2-spaced">Latest readings</h2>
-              <p class="status-line hint" v-if="!solarLatestText">No samples yet. The first row will appear after the next poll.</p>
-              <div class="solar-grid" v-if="solarLatestText">
-                <div class="solar-cell" v-for="cell in solarDisplayCells" :key="cell.label">
-                  <span class="solar-label">{{ cell.label }}</span>
-                  <span class="solar-value">{{ cell.value }}</span>
+              <p class="status-line hint" v-if="!orcaLatestText">No samples yet. The first row will appear after the next poll.</p>
+              <div class="reading-grid" v-if="orcaLatestText">
+                <div class="reading-cell" v-for="cell in orcaDisplayCells" :key="cell.label">
+                  <span class="reading-label">{{ cell.label }}</span>
+                  <span class="reading-value">{{ cell.value }}</span>
                 </div>
               </div>
               <h2 class="h2-spaced">CSV preview <span class="badge badge-muted">last 5 rows</span></h2>
-              <pre class="solar-preview" v-if="solarStatus.preview">{{ solarStatus.preview }}</pre>
+              <pre class="reading-preview" v-if="orcaStatus.preview">{{ orcaStatus.preview }}</pre>
               <p class="status-line hint" v-else>CSV is empty.</p>
             </div>
           </section>
@@ -997,12 +997,12 @@
                 stereoStatus: null,
                 stereoFiles: [],
                 storageInfo: null,
-                solarEnabled: true,
-                solarHost: "192.168.20.66",
-                solarInterval: 60,
-                solarStatus: {
+                orcaEnabled: true,
+                orcaUrl: "http://192.168.0.142:5000/data",
+                orcaInterval: 60,
+                orcaStatus: {
                   enabled: true,
-                  host: "",
+                  url: "",
                   interval_secs: 60,
                   csv_size_bytes: 0,
                   rows_logged: 0,
@@ -1012,7 +1012,7 @@
                   preview: "",
                   columns: [],
                 },
-                solarLive: null,
+                orcaLive: null,
                 pc: null,
               };
             },
@@ -1154,36 +1154,32 @@
                   " (" + pct.toFixed(1) + "%) · " +
                   this.fmtBytes(s.free_bytes || 0) + " free.";
               },
-              solarBadgeText: function () {
-                var st = this.solarStatus;
+              orcaBadgeText: function () {
+                var st = this.orcaStatus;
                 if (!st || !st.enabled) return "Disabled";
                 if (st.last_error) return "Warning";
                 if (st.rows_logged > 0) return "Logging";
                 return "Starting";
               },
-              solarBadgeClass: function () {
-                var st = this.solarStatus;
+              orcaBadgeClass: function () {
+                var st = this.orcaStatus;
                 if (!st || !st.enabled) return "badge-muted";
                 if (st.last_error) return "badge-warn";
                 if (st.rows_logged > 0) return "badge-good";
                 return "";
               },
-              solarLatestText: function () {
-                // True when we have at least one sample to display in
-                // the "Latest readings" grid -- either from /api/solar/status
-                // (background loop's last sample) or a manual refresh
-                // via /api/solar/sample.
-                var st = this.solarStatus;
-                if (this.solarLive && this.solarLive.sample) return true;
+              orcaLatestText: function () {
+                var st = this.orcaStatus;
+                if (this.orcaLive && this.orcaLive.sample) return true;
                 if (st && st.last_sample) return true;
                 return false;
               },
-              solarStatusLine: function () {
-                var st = this.solarStatus;
+              orcaStatusLine: function () {
+                var st = this.orcaStatus;
                 if (!st) return "—";
                 var parts = [];
                 parts.push(st.enabled ? "Enabled" : "Disabled");
-                parts.push("host " + (st.host || "—"));
+                parts.push(st.url || "—");
                 parts.push("interval " + Math.round(st.interval_secs || 0) + "s");
                 parts.push((st.rows_logged || 0) + " row" + ((st.rows_logged === 1) ? "" : "s"));
                 parts.push(this.fmtBytes(st.csv_size_bytes || 0));
@@ -1192,42 +1188,20 @@
                 }
                 return parts.join(" · ") + ".";
               },
-              solarDisplayCells: function () {
-                // Map the 18-column CSV row to a friendlier set of
-                // tiles for the Settings page. Live (manual refresh)
-                // takes precedence over the background-loop sample so
-                // the operator can see their changes reflected
-                // immediately.
-                var src = (this.solarLive && this.solarLive.sample)
-                  ? this.solarLive.sample
-                  : (this.solarStatus.last_sample || {});
+              orcaDisplayCells: function () {
+                var src = (this.orcaLive && this.orcaLive.sample)
+                  ? this.orcaLive.sample
+                  : (this.orcaStatus.last_sample || {});
                 if (!src) return [];
-                function fmt(v, suffix, digits) {
-                  if (v === null || v === undefined || v === "") return "—";
-                  var n = Number(v);
-                  if (!isFinite(n)) return String(v);
-                  return n.toFixed(digits || 0) + (suffix || "");
-                }
-                function txt(v) {
-                  if (v === null || v === undefined || v === "") return "—";
-                  return String(v);
-                }
-                return [
-                  { label: "Battery V", value: fmt(src.battery_voltage_v, " V", 2) },
-                  { label: "Battery A", value: fmt(src.battery_current_a, " A", 2) },
-                  { label: "Battery °C", value: fmt(src.battery_temperature_c, " °C", 1) },
-                  { label: "PV V", value: fmt(src.pv_voltage_v, " V", 1) },
-                  { label: "PV W", value: fmt(src.pv_power_w, " W", 0) },
-                  { label: "Load A", value: fmt(src.load_current_a, " A", 2) },
-                  { label: "Load output", value: txt(src.load_output) },
-                  { label: "Yield today", value: fmt(src.yield_today_wh, " Wh", 0) },
-                  { label: "Yield total", value: fmt(src.yield_total_wh, " Wh", 0) },
-                  { label: "Max W today", value: fmt(src.max_power_today_w, " W", 0) },
-                  { label: "Charging", value: txt(src.charging_mode) },
-                  { label: "MPPT", value: txt(src.mppt_tracking) },
-                  { label: "Error", value: txt(src.error) },
-                  { label: "Device", value: txt(src.device_type) },
-                ];
+                var skip = { ts: true, timestamp_iso: true, timestamp_epoch: true, payload_json: true };
+                var keys = Object.keys(src).filter(function (k) { return !skip[k]; }).sort();
+                return keys.map(function (k) {
+                  var v = src[k];
+                  if (v === null || v === undefined || v === "") {
+                    return { label: k.replace(/_/g, " "), value: "—" };
+                  }
+                  return { label: k.replace(/_/g, " "), value: String(v) };
+                });
               },
               ytApiCredsReady: function () {
                 return !!(String(this.ytOauthClientId || "").trim()
@@ -1345,9 +1319,9 @@
                       // The nullable ints render as empty text inputs.
                       self.stereoTun[k] = st[k] == null ? "" : st[k];
                     });
-                    self.solarEnabled = c.solar_enabled !== false;
-                    self.solarHost = c.solar_host || "192.168.20.66";
-                    self.solarInterval = c.solar_interval_secs != null ? c.solar_interval_secs : 60;
+                    self.orcaEnabled = c.orca_enabled !== false;
+                    self.orcaUrl = c.orca_url || "http://192.168.0.142:5000/data";
+                    self.orcaInterval = c.orca_interval_secs != null ? c.orca_interval_secs : 60;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
                   })
@@ -2042,66 +2016,60 @@
                   alert((r && r.message) || "Provisioned youtubelive profile on camera.");
                 });
               },
-              pollSolar: function () {
+              pollOrca: function () {
                 var self = this;
-                this.api("GET", "/api/solar/status")
+                this.api("GET", "/api/orca/status")
                   .then(function (s) {
-                    if (s) self.solarStatus = s;
+                    if (s) self.orcaStatus = s;
                   })
                   .catch(function () {});
               },
-              refreshSolarLive: function () {
+              refreshOrcaLive: function () {
                 var self = this;
-                var host = String(this.solarHost || "").trim();
-                var qs = host ? ("?host=" + encodeURIComponent(host)) : "";
-                this.api("GET", "/api/solar/sample" + qs)
+                var url = String(this.orcaUrl || "").trim();
+                var qs = url ? ("?url=" + encodeURIComponent(url)) : "";
+                this.api("GET", "/api/orca/sample" + qs)
                   .then(function (r) {
-                    self.solarLive = r;
+                    self.orcaLive = r;
                     if (r && !r.ok) {
-                      alert("ESPHome host is not responding (no entities reachable).");
-                    } else if (r && r.errors) {
-                      // Partial sample: still useful but flag it on the
-                      // status line via the live error so the operator
-                      // sees something is missing.
-                      self.solarStatus.last_error =
-                        "live: missing " + (r.missing || []).slice(0, 6).join(", ");
+                      alert("Orca camera is not responding" + (r.error ? " (" + r.error + ")" : "") + ".");
                     }
-                    self.pollSolar();
+                    self.pollOrca();
                   })
                   .catch(function (e) {
                     alert("Live poll failed: " + (e && e.message ? e.message : e));
                   });
               },
-              saveSolar: function () {
+              saveOrca: function () {
                 var self = this;
-                var interval = parseFloat(this.solarInterval);
+                var interval = parseFloat(this.orcaInterval);
                 if (!isFinite(interval) || interval < 5) interval = 5;
                 if (interval > 3600) interval = 3600;
                 this.api("POST", "/api/config", {
-                  solar_enabled: !!this.solarEnabled,
-                  solar_host: String(this.solarHost || "").trim() || "192.168.20.66",
-                  solar_interval_secs: interval,
+                  orca_enabled: !!this.orcaEnabled,
+                  orca_url: String(this.orcaUrl || "").trim() || "http://192.168.0.142:5000/data",
+                  orca_interval_secs: interval,
                 })
                   .then(function () {
-                    return self.api("POST", "/api/solar/poke", {});
+                    return self.api("POST", "/api/orca/poke", {});
                   })
                   .then(function () {
                     alert("Saved.");
                     self.loadConfig({ force: true });
-                    self.pollSolar();
+                    self.pollOrca();
                   });
               },
-              deleteSolarCsv: function () {
+              deleteOrcaCsv: function () {
                 var self = this;
-                if (!confirm("Delete solar.csv? This wipes the cumulative log; logging continues from the next poll.")) return;
+                if (!confirm("Delete orca.csv? This wipes the cumulative log; logging continues from the next poll.")) return;
                 var typed = prompt('Type "DELETE" to confirm.');
                 if (typed !== "DELETE") {
                   alert("Cancelled — nothing was deleted.");
                   return;
                 }
-                this.api("POST", "/api/solar/delete", {}).then(function (res) {
-                  self.solarLive = null;
-                  self.pollSolar();
+                this.api("POST", "/api/orca/delete", {}).then(function (res) {
+                  self.orcaLive = null;
+                  self.pollOrca();
                   if (res && res.deleted) alert("Deleted " + res.path);
                   else alert("No file to delete.");
                 });
@@ -2152,7 +2120,7 @@
                 self.pollStereo();
                 self.pollStorage();
                 self.pollLink();
-                self.pollSolar();
+                self.pollOrca();
                 self.pollYoutubeApi();
               });
               setInterval(function () {
@@ -2171,7 +2139,7 @@
                 self.pollLink();
               }, 15000);
               setInterval(function () {
-                self.pollSolar();
+                self.pollOrca();
               }, 15000);
               setInterval(function () {
                 // Refresh OAuth + broadcast status independently of the

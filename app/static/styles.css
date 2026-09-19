@@ -862,8 +862,8 @@ tr.sess-stopped td { color: var(--muted); }
   letter-spacing: 0.04em;
 }
 
-/* Inline error tone for status lines (used by the solar logger panel
-   when /api/solar/status reports last_error). Distinct from the banner
+/* Inline error tone for status lines (used by the Orca logger panel
+   when /api/orca/status reports last_error). Distinct from the banner
    palette which fills the page-top alert; this is a one-line note
    inside a panel. */
 .status-line.err {
@@ -880,17 +880,17 @@ tr.sess-stopped td { color: var(--muted); }
   cursor: not-allowed;
 }
 
-/* Solar logger -- compact tile grid for the latest Victron readings.
+/* Latest-readings tile grid for the Orca camera logger.
    Auto-fits between ~140px (mobile) and 200px (desktop) so the panel
    stays useful at both widths without a custom breakpoint. */
-.solar-grid {
+.reading-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 0.55rem;
   margin: 0.4rem 0 0.2rem;
 }
 
-.solar-cell {
+.reading-cell {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
@@ -900,23 +900,23 @@ tr.sess-stopped td { color: var(--muted); }
   background: rgba(0, 0, 0, 0.18);
 }
 
-.solar-label {
+.reading-label {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--muted);
 }
 
-.solar-value {
+.reading-value {
   font-size: 1.05rem;
   font-weight: 600;
   color: var(--text);
 }
 
-/* Capped-height monospace panes with horizontal scroll: the solar CSV
+/* Capped-height monospace panes with horizontal scroll: the Orca CSV
    preview (long header rows line up visually) and the stereo capture log
    tail (raw gstreamer/depthai output, which must not wrap). */
-.solar-preview,
+.reading-preview,
 .log-tail {
   margin: 0.35rem 0 0.2rem;
   padding: 0.55rem 0.75rem;
