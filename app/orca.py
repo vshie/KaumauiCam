@@ -40,6 +40,16 @@ DEFAULT_INTERVAL_S = 60.0
 
 META_COLS: Tuple[str, ...] = ("timestamp_iso", "timestamp_epoch", "payload_json")
 
+# Known Orca /data keys, in a useful CSV/UI order. Extra keys still get
+# logged; they just trail these.
+PREFERRED_FLAT_COLS: Tuple[str, ...] = (
+    "voltage",
+    "current",
+    "internal_temperature",
+    "external_temperature",
+    "humidity",
+)
+
 _state_lock = threading.Lock()
 _thread: Optional[threading.Thread] = None
 _stop = threading.Event()
@@ -63,8 +73,17 @@ def _ensure_dir() -> None:
         os.makedirs(d, exist_ok=True)
 
 
+def _snake(name: str) -> str:
+    """externalTemperature -> external_temperature."""
+    s = str(name)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s)
+    s = re.sub(r"[^A-Za-z0-9]+", "_", s)
+    return s.strip("_").lower() or "field"
+
+
 def _col(prefix: str, name: str) -> str:
-    raw = re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_").lower() or "field"
+    raw = _snake(name)
     key = raw if not prefix else f"{prefix}_{raw}"
     if key in META_COLS:
         key = "cam_" + key
@@ -146,8 +165,15 @@ def _read_header(path: str) -> List[str]:
         return []
 
 
+def _ordered_extra(flat: Dict[str, str]) -> List[str]:
+    extra = [k for k in flat.keys() if k not in META_COLS]
+    preferred = [c for c in PREFERRED_FLAT_COLS if c in extra]
+    rest = sorted(k for k in extra if k not in PREFERRED_FLAT_COLS)
+    return preferred + rest
+
+
 def _header_for(flat: Dict[str, str], existing: List[str]) -> List[str]:
-    extra = sorted(k for k in flat.keys() if k not in META_COLS)
+    extra = _ordered_extra(flat)
     if not existing:
         return ["timestamp_iso", "timestamp_epoch", *extra, "payload_json"]
     header = list(existing)

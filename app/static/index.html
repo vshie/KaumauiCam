@@ -1194,13 +1194,47 @@
                   : (this.orcaStatus.last_sample || {});
                 if (!src) return [];
                 var skip = { ts: true, timestamp_iso: true, timestamp_epoch: true, payload_json: true };
-                var keys = Object.keys(src).filter(function (k) { return !skip[k]; }).sort();
+                var labels = {
+                  voltage: "Voltage",
+                  current: "Current",
+                  internal_temperature: "Internal temp",
+                  external_temperature: "External temp",
+                  humidity: "Humidity",
+                };
+                var units = {
+                  voltage: " V",
+                  internal_temperature: " °C",
+                  external_temperature: " °C",
+                  humidity: " %",
+                };
+                var order = [
+                  "voltage", "current", "internal_temperature",
+                  "external_temperature", "humidity",
+                ];
+                var keys = Object.keys(src).filter(function (k) { return !skip[k]; });
+                keys.sort(function (a, b) {
+                  var ia = order.indexOf(a);
+                  var ib = order.indexOf(b);
+                  if (ia < 0 && ib < 0) return a < b ? -1 : a > b ? 1 : 0;
+                  if (ia < 0) return 1;
+                  if (ib < 0) return -1;
+                  return ia - ib;
+                });
                 return keys.map(function (k) {
                   var v = src[k];
+                  var label = labels[k] || k.replace(/_/g, " ");
                   if (v === null || v === undefined || v === "") {
-                    return { label: k.replace(/_/g, " "), value: "—" };
+                    return { label: label, value: "—" };
                   }
-                  return { label: k.replace(/_/g, " "), value: String(v) };
+                  var n = Number(v);
+                  var shown;
+                  if (v !== "" && isFinite(n) && String(v).trim() !== "") {
+                    shown = (Math.abs(n) >= 100 ? n.toFixed(1) : n.toFixed(2)).replace(/\.?0+$/, "");
+                    if (shown === "-0") shown = "0";
+                  } else {
+                    shown = String(v);
+                  }
+                  return { label: label, value: shown + (units[k] || "") };
                 });
               },
               ytApiCredsReady: function () {

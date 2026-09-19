@@ -126,7 +126,19 @@ The "kickoff" timer is per *broadcast attempt*, not per ffmpeg session — ffmpe
 
 The Wailoa camera exposes a JSON snapshot at **`http://192.168.0.142:5000/data`**. The extension polls that URL every `orca_interval_secs` (default 60s) and appends one row to **`/app/data/orca.csv`**. The file is **cumulative** (append-only, no rotation) — the operator downloads or deletes it from **Settings → Orca camera logging**.
 
-CSV schema: `timestamp_iso` is always column 1, `timestamp_epoch` is column 2, then one column per flattened field from the camera JSON, and `payload_json` last (the raw body, so newly added camera keys are never lost). Nested objects become `parent_child` columns. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/wailoacam/orca.csv` on the host) so it survives container rebuilds.
+CSV schema for the current Orca `/data` payload:
+
+```
+{"current":54.3,"externalTemperature":0,"humidity":37.65,"internalTemperature":45.37,"voltage":4.98}
+```
+
+becomes
+
+```
+timestamp_iso, timestamp_epoch, voltage, current, internal_temperature, external_temperature, humidity, payload_json
+```
+
+CamelCase keys are stored as snake_case. Nested objects (if the camera adds them later) become `parent_child` columns. `payload_json` keeps the raw body so newly added camera keys are never lost.
 
 ## Push this repo (you deploy)
 
