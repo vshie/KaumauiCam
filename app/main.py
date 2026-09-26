@@ -17,6 +17,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory, send_f
 
 import bandwidth
 import config as cfgmod
+import hydrovu
 import link_uptime
 import orca
 import youtube_api
@@ -404,7 +405,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.6"
+_EXTENSION_VERSION = "0.4.7"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -901,8 +902,20 @@ def api_config():
     if request.method == "GET":
         out = cfgmod.load()
         out["camera_stream_url"] = CAMERA_RTSP_URL
+        # Never leak the HydroVu token to the browser: anyone with UI
+        # access could exfiltrate it (it's shared across the whole
+        # Sea Grant HydroVu account). Expose only a boolean the
+        # Settings tab can show as a "Token saved" placeholder.
+        out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
+        out.pop("hydrovu_token", None)
         return jsonify(out)
     data = request.get_json(force=True, silent=True) or {}
+    # Empty token strings from the Settings page mean "leave the saved
+    # token alone" -- otherwise every unrelated Settings save (quota,
+    # storage, etc.) would silently wipe the token because the field
+    # renders as blank whenever it's already set.
+    if "hydrovu_token" in data and not str(data.get("hydrovu_token") or "").strip():
+        data.pop("hydrovu_token", None)
     out = cfgmod.update(data)
     # Wake the YouTube health monitor when channel-URL config changes so
     # the operator gets a fresh live/not-live readout within ~1s of
@@ -912,6 +925,15 @@ def api_config():
             youtube_monitor.poke()
         except Exception:
             logger.exception("youtube_monitor.poke after config save failed")
+    # Wake the HydroVu poller if any of its knobs changed so the operator
+    # sees a fresh fetch (and updated graphs) within seconds of saving.
+    if any(k in data for k in ("hydrovu_token", "hydrovu_enabled", "hydrovu_interval_secs")):
+        try:
+            hydrovu.poke()
+        except Exception:
+            logger.exception("hydrovu.poke after config save failed")
+    out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
+    out.pop("hydrovu_token", None)
     return jsonify(out)
 
 
@@ -1274,6 +1296,72 @@ def orca_poke():
     """Wake the logger thread immediately after Settings save."""
     orca.poke()
     return jsonify({"ok": True})
+
+
+@app.route("/api/hydrovu/series", methods=["GET"])
+def hydrovu_series():
+    """Cached seven-day water-quality series for the Live tab.
+
+    Returns the reduced series (one entry per parameter, each a list of
+    ``[epoch_ms, value]`` pairs) plus parameter metadata. Reads a JSON
+    cache written by the poller, so this endpoint is cheap even when hit
+    frequently (the Live tab refreshes every hour under normal use)."""
+    return jsonify(hydrovu.series())
+
+
+@app.route("/api/hydrovu/status", methods=["GET"])
+def hydrovu_status():
+    """Poller state for the Settings tab: last fetch time, last error,
+    CSV size/rows, per-parameter point counts, token-set flag. Never
+    returns the token itself."""
+    try:
+        st = hydrovu.status()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        st["preview"] = hydrovu.csv_preview(max_rows=5)
+    except Exception:
+        st["preview"] = ""
+    return jsonify(st)
+
+
+@app.route("/api/hydrovu/poke", methods=["POST"])
+def hydrovu_poke():
+    """Force an immediate scrape (used by Settings after Save / Refresh)."""
+    hydrovu.poke()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/hydrovu/refresh", methods=["POST"])
+def hydrovu_refresh():
+    """One-shot synchronous poll. Same effect as ``poke`` but returns the
+    result inline so the UI can show success/failure without polling
+    ``/status``."""
+    return jsonify(hydrovu.refresh_now())
+
+
+@app.route("/api/hydrovu/download", methods=["GET"])
+def hydrovu_download():
+    """Send the cumulative water-quality CSV."""
+    path = hydrovu.csv_path()
+    if not os.path.isfile(path):
+        return jsonify({"error": "no csv yet"}), 404
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name="hydrovu.csv",
+        mimetype="text/csv",
+    )
+
+
+@app.route("/api/hydrovu/delete", methods=["POST"])
+def hydrovu_delete():
+    """Wipe hydrovu.csv. Logging continues; the next poll re-fetches the
+    full 7-day window and repopulates the file."""
+    res = hydrovu.delete_csv()
+    if not res.get("ok"):
+        return jsonify(res), 500
+    return jsonify(res)
 
 
 @app.route("/api/camera/ensure-livepreview", methods=["POST"])
@@ -1885,6 +1973,13 @@ def main() -> None:
         orca.start(get_cfg=cfgmod.load)
     except Exception:
         logger.exception("orca.start failed")
+    # HydroVu water-quality scraper. Reads the token/enabled/interval on
+    # every cycle via this lambda, so Settings edits take effect on the
+    # next tick (or immediately, via the /api/hydrovu/poke wake).
+    try:
+        hydrovu.start(get_cfg=cfgmod.load)
+    except Exception:
+        logger.exception("hydrovu.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

@@ -144,6 +144,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "orca_enabled": True,
     "orca_url": "http://192.168.0.142:5000/data",
     "orca_interval_secs": 60.0,
+    # HydroVu water-quality scraper (see app/hydrovu.py). Pulls the last
+    # 7 days of the Wailoa Sensor's salinity/turbidity/DO/pH/temperature/
+    # ORP once per hour and drives the Live tab's six side charts.
+    #
+    # ``hydrovu_token`` is the public-access token the operator pastes on
+    # the Settings tab -- either the full ``.../#/?token=...`` URL or
+    # just the string after ``token=``. It is never returned by GET
+    # /api/config; only a ``hydrovu_token_set`` boolean is exposed so
+    # the token can't be exfiltrated by anyone who can reach the UI.
+    "hydrovu_enabled": True,
+    "hydrovu_token": "",
+    "hydrovu_interval_secs": 3600.0,
 }
 
 CONFIG_PATH = os.environ.get("WAILOA_CONFIG", "/app/data/config.json")
