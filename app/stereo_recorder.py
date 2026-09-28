@@ -31,7 +31,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,32 @@ BACKOFF_MAX_SECS = 60.0
 # wedge (camera drops off, GStreamer stalls).
 STARTUP_GRACE_SECS = 45.0
 PROGRESS_GRACE_SECS = 20.0
+
+
+def latest_finished_segment(dest_dir: str, running: bool) -> Optional[str]:
+    """Newest usable segment that matroskamux has finalized.
+
+    While the child runs, the newest file is still open (no cues/duration
+    until EOS, last cluster possibly half-written), so it's skipped. Stubs
+    under MIN_SEGMENT_BYTES are ignored either way."""
+    try:
+        paths = glob.glob(os.path.join(dest_dir, SEGMENT_GLOB))
+    except OSError:
+        return None
+    all_by_mtime: List[Tuple[float, str, int]] = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+        except OSError:
+            continue
+        all_by_mtime.append((st.st_mtime, p, st.st_size))
+    all_by_mtime.sort(reverse=True)
+    if running and all_by_mtime:
+        all_by_mtime = all_by_mtime[1:]
+    for _m, p, size in all_by_mtime:
+        if size >= MIN_SEGMENT_BYTES:
+            return p
+    return None
 
 
 class StereoRecorder:

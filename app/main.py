@@ -20,6 +20,7 @@ import config as cfgmod
 import hydrovu
 import link_uptime
 import orca
+import stereo_snapshot
 import youtube_api
 import youtube_monitor
 from camera import AxisCamera
@@ -405,7 +406,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.7"
+_EXTENSION_VERSION = "0.4.8"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -1818,6 +1819,31 @@ def stereo_status():
         }
     )
     return jsonify(st)
+
+
+@app.route("/api/stereo/snapshot/meta", methods=["GET"])
+def stereo_snapshot_meta():
+    meta = stereo_snapshot.get_snapshot(_stereo_list_dir(cfgmod.load()), stereo.is_running())
+    out: Dict[str, Any] = {"available": bool(meta), "recording": stereo.is_running()}
+    if meta:
+        out.update(
+            {
+                "source": meta.get("source"),
+                "captured_iso": meta.get("captured_iso"),
+                "captured_epoch": meta.get("captured_epoch"),
+            }
+        )
+    return jsonify(out)
+
+
+@app.route("/api/stereo/snapshot.jpg", methods=["GET"])
+def stereo_snapshot_jpg():
+    meta = stereo_snapshot.get_snapshot(_stereo_list_dir(cfgmod.load()), stereo.is_running())
+    if not meta:
+        return jsonify({"error": "no stereo footage yet"}), 404
+    resp = send_file(stereo_snapshot.SNAPSHOT_PATH, mimetype="image/jpeg", max_age=0)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @app.route("/api/stereo/list", methods=["GET"])

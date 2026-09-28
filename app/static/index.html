@@ -66,7 +66,7 @@
 
           <section v-show="tab === 'live'" class="tab-panel tab-panel-live">
             <div class="live-stage">
-              <aside class="wq-column wq-column-left" aria-label="Water quality (left)">
+              <aside class="wq-column wq-column-left" aria-label="Water quality (left)" :style="{ '--wq-rows': wqLeftParams.length }">
                 <div
                   v-for="p in wqLeftParams"
                   :key="'wq-left-' + p.id"
@@ -103,7 +103,7 @@
               <div class="live-frame">
                 <video ref="liveVideo" playsinline autoplay muted></video>
               </div>
-              <aside class="wq-column wq-column-right" aria-label="Water quality (right)">
+              <aside class="wq-column wq-column-right" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1 }">
                 <div
                   v-for="p in wqRightParams"
                   :key="'wq-right-' + p.id"
@@ -135,6 +135,17 @@
                     </div>
                   </div>
                   <p class="wq-chart-status" v-if="!wqChart(p.id).points.length">{{ wqEmptyLine }}</p>
+                </div>
+                <div class="wq-chart c3-snap" :class="{ 'wq-chart-empty': !stereoSnap.available }">
+                  <div class="wq-chart-head">
+                    <span class="wq-chart-label">Stereo cam</span>
+                    <span class="wq-chart-unit">C3</span>
+                    <span class="wq-chart-value" :title="stereoSnapCapturedText">{{ stereoSnapAgeText }}</span>
+                  </div>
+                  <div class="c3-snap-body" v-if="stereoSnap.available">
+                    <img :src="kmUrl('api/stereo/snapshot.jpg?t=' + stereoSnapTs)" alt="Latest C3 stereo camera color frame" />
+                  </div>
+                  <p class="wq-chart-status" v-else>No stereo footage yet.</p>
                 </div>
               </aside>
             </div>
@@ -1133,10 +1144,16 @@
                   { id: "temperature", label: "Temperature", unitLabel: "°C",    column: "temperature_c",  side: "left" },
                   { id: "turbidity",   label: "Turbidity",   unitLabel: "NTU",   column: "turbidity_ntu",  side: "right" },
                   { id: "ph",          label: "pH",          unitLabel: "",      column: "ph",             side: "right" },
-                  { id: "orp",         label: "ORP",         unitLabel: "mV",    column: "orp_mv",         side: "right" },
+                  { id: "orp",         label: "ORP",         unitLabel: "mV",    column: "orp_mv",         side: "left" },
                 ],
                 wqSeries: {},
                 wqFetchedTs: 0,
+                // Latest C3 color still (Live tab), decoded server-side from
+                // the newest finished stereo segment. ``stereoSnapTs`` is the
+                // image cache-buster; it only changes when the source
+                // segment does, so unchanged frames aren't re-downloaded.
+                stereoSnap: { available: false },
+                stereoSnapTs: 0,
                 wqStatus: {
                   enabled: true,
                   token_set: false,
@@ -1376,6 +1393,19 @@
                   }
                   return { label: label, value: shown + (units[k] || "") };
                 });
+              },
+              stereoSnapAgeText: function () {
+                var e = this.stereoSnap && this.stereoSnap.captured_epoch;
+                if (!e) return "";
+                var s = Math.max(0, Math.round(this.nowTick / 1000 - e));
+                if (s < 90) return s + "s ago";
+                if (s < 5400) return Math.round(s / 60) + "m ago";
+                if (s < 172800) return Math.round(s / 3600) + "h ago";
+                return Math.round(s / 86400) + "d ago";
+              },
+              stereoSnapCapturedText: function () {
+                var e = this.stereoSnap && this.stereoSnap.captured_epoch;
+                return e ? "Captured " + formatHonoluluNow(e * 1000) : "";
               },
               wqLeftParams: function () {
                 return this.wqParams.filter(function (p) { return p.side === "left"; });
@@ -1855,6 +1885,17 @@
                   })
                   .then(function (list) {
                     self.stereoFiles = (list && list.files) || [];
+                  })
+                  .catch(function () {});
+              },
+              pollStereoSnapshot: function () {
+                var self = this;
+                if (this.tab !== "live") return;
+                this.api("GET", "/api/stereo/snapshot/meta")
+                  .then(function (m) {
+                    m = m || { available: false };
+                    if (m.source && m.source !== self.stereoSnap.source) self.stereoSnapTs = Date.now();
+                    self.stereoSnap = m;
                   })
                   .catch(function () {});
               },
@@ -2469,8 +2510,10 @@
                 try {
                   window.sessionStorage && sessionStorage.setItem("km.tab", v);
                 } catch (e) {}
-                if (v === "live") this.startLive();
-                else this.stopLive();
+                if (v === "live") {
+                  this.startLive();
+                  this.pollStereoSnapshot();
+                } else this.stopLive();
               },
               draftYt: {
                 handler: function (v) {
@@ -2507,6 +2550,7 @@
                 self.pollStream();
                 self.pollRec();
                 self.pollStereo();
+                self.pollStereoSnapshot();
                 self.pollStorage();
                 self.pollLink();
                 self.pollOrca();
@@ -2523,6 +2567,9 @@
               setInterval(function () {
                 self.pollStereo();
               }, 3000);
+              setInterval(function () {
+                self.pollStereoSnapshot();
+              }, 15000);
               setInterval(function () {
                 self.pollStorage();
               }, 10000);
