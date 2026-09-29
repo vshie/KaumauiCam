@@ -21,3 +21,6 @@ numba>=0.60.0
 filterpy>=1.4.5
 pillow>=10.0.0
 polars>=1.0.0
+# Ubuntu's zoneinfo database isn't installed in the image; polars (and
+# anything converting tz-aware timestamps) needs it to resolve "UTC".
+tzdata>=2024.1

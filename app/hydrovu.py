@@ -243,26 +243,29 @@ def _reduce_series(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     rows = (payload or {}).get("data") or []
     if not rows:
         return {pid: {"unit": unit, "points": []} for pid, _lbl, unit, _col in PARAMS}
-    blob = rows[0].get("data_blob") or {}
+    # One row per HydroVu time slice (a fixed ~11-day bucket at resolution
+    # 13), so a 7-day window that straddles a slice boundary comes back as
+    # two rows. Reading only rows[0] silently dropped the newer slice.
     out: Dict[str, Dict[str, Any]] = {}
     for pid, _label, want_unit, _col in PARAMS:
-        entry = blob.get(pid) or {}
-        raw = entry.get("raw") or []
-        points: List[List[float]] = []
-        for sample in raw:
-            if not sample:
-                continue
-            t = sample.get("time")
-            v = sample.get("value")
-            if t is None or v is None:
-                continue
-            try:
-                points.append([int(t), float(v)])
-            except (TypeError, ValueError):
-                continue
-        points.sort(key=lambda ab: ab[0])
-        unit = entry.get("unit") or want_unit
-        out[pid] = {"unit": unit, "points": points}
+        by_time: Dict[int, float] = {}
+        unit = None
+        for row in rows:
+            entry = (row.get("data_blob") or {}).get(pid) or {}
+            unit = unit or entry.get("unit")
+            for sample in entry.get("raw") or []:
+                if not sample:
+                    continue
+                t = sample.get("time")
+                v = sample.get("value")
+                if t is None or v is None:
+                    continue
+                try:
+                    by_time[int(t)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        points = [[t, by_time[t]] for t in sorted(by_time)]
+        out[pid] = {"unit": unit or want_unit, "points": points}
     return out
 
 

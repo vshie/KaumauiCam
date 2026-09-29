@@ -51,8 +51,12 @@ def _compute_motion_cells(
             cell_pixel_count: int = (y1 - y0) * (x1 - x0)
             for y in range(y0, y1):
                 for x in range(x0, x1):
+                    # LOCAL PATCH (Wailoa extension): under numba, int() of a
+                    # uint8 stays unsigned, so a pixel that got 1 level darker
+                    # wrapped to ~2**64 and always counted as changed. Cast to
+                    # signed int32 before subtracting.
                     if (
-                        abs(int(curr_frame[y, x]) - int(prev_frame[y, x]))
+                        abs(np.int32(curr_frame[y, x]) - np.int32(prev_frame[y, x]))
                         > pixel_threshold
                     ):
                         changed_pixels += 1

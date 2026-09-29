@@ -20,6 +20,7 @@ import glob
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -35,22 +36,28 @@ _cache: Dict[Tuple[str, float, float], List[Dict[str, Any]]] = {}
 def _events_in_file(path: str, threshold: float) -> List[Dict[str, Any]]:
     import polars as pl  # heavy import; only paid when motion data exists
 
+    # Pull timestamps as integer epoch-µs inside polars. Materializing the
+    # tz-aware (UTC) column as Python datetimes needs zoneinfo's tz database,
+    # which the image doesn't ship, and polars panics instead of raising.
     df = (
         pl.read_parquet(path, columns=["timestamp", "smoothed_motion", "file_name"])
-        .sort("timestamp")
+        .with_columns(pl.col("timestamp").dt.epoch("us").alias("ts_us"))
+        .sort("ts_us")
+        .filter(pl.col("smoothed_motion") >= threshold)
+        .select("ts_us", "smoothed_motion", "file_name")
     )
     events: List[Dict[str, Any]] = []
     cur: Dict[str, Any] | None = None
-    for ts, sm, fname in df.iter_rows():
-        if sm is None or ts is None or sm < threshold:
+    for ts_us, sm, fname in df.iter_rows():
+        if sm is None or ts_us is None:
             continue
-        t = ts.timestamp()
+        t = ts_us / 1e6
         if cur is not None and t - cur["end_epoch"] <= MERGE_GAP_SECS:
             cur["end_epoch"] = t
             cur["peak"] = max(cur["peak"], float(sm))
             continue
         cur = {
-            "start_iso": ts.isoformat(),
+            "start_iso": datetime.fromtimestamp(t, tz=timezone.utc).isoformat(),
             "start_epoch": t,
             "end_epoch": t,
             "peak": float(sm),
@@ -89,7 +96,9 @@ def recent_events(motion_dir: str, threshold: float, limit: int = 5) -> List[Dic
             if key not in _cache:
                 try:
                     _cache[key] = _events_in_file(p, threshold)
-                except Exception as e:
+                except BaseException as e:  # noqa: B036 -- polars raises pyo3 PanicException
+                    if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                        raise
                     # Also covers a file caught mid-write; its mtime changes
                     # once upstream finishes, which invalidates this entry.
                     logger.warning("stereo motion: skipping unreadable %s: %s", p, e)
