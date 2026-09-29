@@ -67,9 +67,17 @@ POLL_SECS = 1.0
 SPACE_CHECK_SECS = 5.0
 
 # Grace period after SIGINT. The script joins its writer thread with a 15 s
-# timeout before returning from main(), so allow a bit more than that before
-# escalating to SIGTERM/SIGKILL.
-SIGINT_GRACE_SECS = 25.0
+# timeout and then stops the motion Parquet writer with another 15 s timeout
+# before returning from main(). The motion writer only flushes at shutdown
+# (upstream hardcodes a 100k-row flush threshold, ~55 min at 30 fps), so
+# escalating to SIGTERM/SIGKILL early would drop the whole burst's motion
+# data. Allow both joins plus slack.
+SIGINT_GRACE_SECS = 50.0
+
+# Motion Parquet output lives beside the stereo MKV folder rather than in
+# it: everything matching SEGMENT_GLOB in the stereo folder is counted and
+# pruned, and keeping the Parquet out of it keeps that invariant simple.
+MOTION_DIR_NAME = "stereo_motion"
 
 # Backoff bounds for a child that exits without producing anything. Starts
 # well above the Axis recorder's 1 s because a failed DepthAI connect already
@@ -92,6 +100,12 @@ BACKOFF_MAX_SECS = 60.0
 # wedge (camera drops off, GStreamer stalls).
 STARTUP_GRACE_SECS = 45.0
 PROGRESS_GRACE_SECS = 20.0
+
+
+def stereo_motion_dir(dest_dir: str) -> str:
+    """Motion output folder for a stereo destination, e.g.
+    /mnt/usb/WailoaCam/stereo -> /mnt/usb/WailoaCam/stereo_motion."""
+    return os.path.join(os.path.dirname(os.path.normpath(dest_dir)), MOTION_DIR_NAME)
 
 
 def latest_finished_segment(dest_dir: str, running: bool) -> Optional[str]:
@@ -243,6 +257,21 @@ class StereoRecorder:
             cmd += ["--quality-max", str(t["quality_max"])]
         if t.get("max_bitrate") is not None:
             cmd += ["--max-bitrate", str(t["max_bitrate"])]
+        # Motion detection is opt-in upstream: the detector only runs when
+        # --motion-output is given.
+        if t.get("motion_enabled"):
+            cmd += [
+                "--motion-output", stereo_motion_dir(dest_dir),
+                "--motion-grid-x", str(t["motion_grid_x"]),
+                "--motion-grid-y", str(t["motion_grid_y"]),
+                "--motion-sensitivity", str(t["motion_sensitivity"]),
+                "--motion-sensitivity-threshold", str(t["motion_sensitivity_threshold"]),
+                "--kalman-q", str(t["kalman_q"]),
+                "--kalman-r", str(t["kalman_r"]),
+                "--motion-warmup", str(t["motion_warmup"]),
+            ]
+            if not t.get("kalman_enabled", True):
+                cmd.append("--no-kalman")
         return cmd
 
     def _prune_stubs(self, dest_dir: str) -> None:

@@ -27,7 +27,7 @@ class Synchronizer:
         self.max_age: float = max_age
         self._lock: threading.Lock = threading.Lock()
         self._condition: threading.Condition = threading.Condition(self._lock)
-        
+
         self._queues: Dict[str, List[Tuple[Any, float, float]]] = {
             "color": [],
             "left": [],
@@ -46,7 +46,7 @@ class Synchronizer:
         with self._condition:
             if stream_name not in self._queues:
                 self._queues[stream_name] = []
-                
+
             self._queues[stream_name].append((frame, timestamp, time.time()))
 
             self._try_match()
@@ -83,7 +83,7 @@ class Synchronizer:
                     "Dropping frame from %s due to sync mismatch. Tolerance: %.3f ms, Diff: %.3f ms",
                     oldest_stream,
                     self.tolerance,
-                    (max_ts - min_ts) * 1000.0
+                    (max_ts - min_ts) * 1000.0,
                 )
                 self._queues[oldest_stream].pop(0)
 
@@ -96,7 +96,9 @@ class Synchronizer:
         for stream_name, q in self._queues.items():
             # item is (frame, timestamp, host_timestamp)
             while len(q) > 0 and (current_time - q[0][2]) > self.max_age / 1000.0:
-                logger.warning("Garbage collecting stale frame from %s queue", stream_name)
+                logger.warning(
+                    "Garbage collecting stale frame from %s queue", stream_name
+                )
                 q.pop(0)
 
     def poll(self, timeout: float = 10.0) -> Optional[Dict[str, Any]]:

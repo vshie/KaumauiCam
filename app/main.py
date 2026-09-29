@@ -20,6 +20,7 @@ import config as cfgmod
 import hydrovu
 import link_uptime
 import orca
+import stereo_motion
 import stereo_snapshot
 import youtube_api
 import youtube_monitor
@@ -34,7 +35,7 @@ from scheduler import (
     should_be_on,
 )
 from stereo_recorder import MIN_SEGMENT_BYTES as STEREO_MIN_SEGMENT_BYTES
-from stereo_recorder import StereoRecorder
+from stereo_recorder import StereoRecorder, stereo_motion_dir
 from usb_storage import (
     USB_MOUNT_POINT,
     get_free_mb,
@@ -406,7 +407,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.4.8"
+_EXTENSION_VERSION = "0.5.0"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -438,7 +439,8 @@ def _stereo_stop_async() -> None:
     """Tear the stereo child down off the scheduler thread.
 
     Finalizing the current MKV after SIGINT takes a couple of seconds
-    normally and up to ~40 s if the child wedges. The scheduler thread also
+    normally (longer with motion detection, which flushes its Parquet at
+    shutdown) and up to ~65 s if the child wedges. The scheduler thread also
     supervises the YouTube ffmpeg, so blocking it there would show up to
     viewers as a stalled stream. ``StereoRecorder.stop`` is idempotent, so
     the only thing we need to guard is spawning a second teardown thread."""
@@ -1642,8 +1644,8 @@ STEREO_SPEED_PRESETS = (
 )
 STEREO_TUNES = ("none", "stillimage", "fastdecode", "zerolatency")
 
-# name -> (kind, lo, hi) for numbers, or (kind, choices) for enums.
-# "int_opt" permits null, meaning "don't pass the flag at all".
+# name -> (kind, lo, hi) for numbers, (kind, choices) for enums, or
+# ("bool",). "int_opt" permits null, meaning "don't pass the flag at all".
 STEREO_TUNABLE_SPEC: Dict[str, Any] = {
     "segment_secs": ("int", 1, 3600),
     "fps": ("int", 1, 60),
@@ -1662,6 +1664,16 @@ STEREO_TUNABLE_SPEC: Dict[str, Any] = {
     "speed_preset": ("enum", STEREO_SPEED_PRESETS),
     "tune": ("enum", STEREO_TUNES),
     "encoder": ("enum", STEREO_ENCODERS),
+    # Motion detection (c3record --motion-*/--kalman-* flags).
+    "motion_enabled": ("bool",),
+    "motion_grid_x": ("int", 1, 64),
+    "motion_grid_y": ("int", 1, 64),
+    "motion_sensitivity": ("float", 0.0, 1.0),
+    "motion_sensitivity_threshold": ("float", 0.0, 1.0),
+    "kalman_enabled": ("bool",),
+    "kalman_q": ("float", 0.0, 10.0),
+    "kalman_r": ("float", 0.0, 10.0),
+    "motion_warmup": ("float", 0.0, 60.0),
 }
 
 
@@ -1680,11 +1692,16 @@ def _validate_stereo_tunables(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], str]
                 return {}, f"{key} must be one of {', '.join(spec[1])}"
             clean[key] = value
             continue
+        if kind == "bool":
+            if not isinstance(value, bool):
+                return {}, f"{key} must be true or false"
+            clean[key] = value
+            continue
         if kind == "int_opt" and value in (None, ""):
             clean[key] = None
             continue
         try:
-            n = int(round(float(value)))
+            n = float(value) if kind == "float" else int(round(float(value)))
         except (TypeError, ValueError):
             return {}, f"{key} must be a number"
         lo, hi = spec[1], spec[2]
@@ -1702,6 +1719,8 @@ def _stereo_choices() -> Dict[str, Any]:
     for key, spec in STEREO_TUNABLE_SPEC.items():
         if spec[0] == "enum":
             out[key] = {"options": list(spec[1])}
+        elif spec[0] == "bool":
+            out[key] = {"bool": True}
         else:
             out[key] = {"min": spec[1], "max": spec[2], "optional": spec[0] == "int_opt"}
     return out
@@ -1816,9 +1835,30 @@ def stereo_status():
             "stopping": _stereo_stopping(),
             "free_bytes": free,
             "min_free_bytes": _stereo_min_free_bytes(dest) if dest else None,
+            "motion_dir": stereo_motion_dir(dest) if dest else None,
         }
     )
     return jsonify(st)
+
+
+@app.route("/api/stereo/motion/recent", methods=["GET"])
+def stereo_motion_recent():
+    cfg = cfgmod.load()
+    tun = cfg.get("stereo_tunables") or {}
+    try:
+        limit = max(1, min(50, int(request.args.get("limit", 5))))
+    except ValueError:
+        limit = 5
+    threshold = float(tun.get("motion_sensitivity_threshold") or 0.05)
+    mdir = stereo_motion_dir(_stereo_list_dir(cfg))
+    return jsonify(
+        {
+            "enabled": bool(tun.get("motion_enabled")),
+            "threshold": threshold,
+            "dir": mdir,
+            "events": stereo_motion.recent_events(mdir, threshold, limit),
+        }
+    )
 
 
 @app.route("/api/stereo/snapshot/meta", methods=["GET"])

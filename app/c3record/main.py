@@ -18,6 +18,8 @@ os.environ["DEPTHAI_WATCHDOG_INITIAL_DELAY"] = "30000"
 import depthai as dai
 
 from c3_video import C3VideoWriterManager
+from motion_detector import MotionDetector
+from motion_writer import MotionParquetWriter
 from polling import queue_polling_worker
 from sync import Synchronizer
 from writer import writer_thread_worker
@@ -279,7 +281,7 @@ def main() -> None:
         type=str,
         choices=["default", "nvidia", "vaapi"],
         default="default",
-        help="H.264 encoder to use: 'default' (x264enc), 'nvidia' (nvh264enc), or 'vaapi' (vaapih264enc)."
+        help="H.264 encoder to use: 'default' (x264enc), 'nvidia' (nvh264enc), or 'vaapi' (vaapih264enc).",
     )
 
     parser.add_argument(
@@ -348,6 +350,59 @@ def main() -> None:
         type=str,
         default=None,
         help="Custom metadata tag embedded into the output files.",
+    )
+    parser.add_argument(
+        "--motion-output",
+        type=str,
+        default=None,
+        help="Directory to save motion metrics as Parquet files (created if non-existent).",
+    )
+    parser.add_argument(
+        "--motion-grid-x",
+        type=int,
+        default=16,
+        help="Number of horizontal grid cells for motion detection (default: 16).",
+    )
+    parser.add_argument(
+        "--motion-grid-y",
+        type=int,
+        default=12,
+        help="Number of vertical grid cells for motion detection (default: 12).",
+    )
+    parser.add_argument(
+        "--motion-sensitivity",
+        type=float,
+        default=0.8,
+        help="Motion detection sensitivity from 0.0 to 1.0 (default: 0.8).",
+    )
+    parser.add_argument(
+        "--motion-sensitivity-threshold",
+        type=float,
+        default=0.05,
+        help="Threshold on smoothed active cell ratio (0.0 to 1.0) to declare a frame in motion (default: 0.05).",
+    )
+    parser.add_argument(
+        "--kalman-q",
+        type=float,
+        default=0.01,
+        help="Process noise variance for the linear Kalman filter (default: 0.05).",
+    )
+    parser.add_argument(
+        "--kalman-r",
+        type=float,
+        default=0.05,
+        help="Measurement noise variance for the linear Kalman filter (default: 0.001).",
+    )
+    parser.add_argument(
+        "--no-kalman",
+        action="store_true",
+        help="Disable linear Kalman filter motion smoothing.",
+    )
+    parser.add_argument(
+        "--motion-warmup",
+        type=float,
+        default=3.0,
+        help="Initial camera white balance settling duration in seconds where motion is suppressed (default: 3.0).",
     )
 
     args: argparse.Namespace = parser.parse_args()
@@ -424,6 +479,27 @@ def main() -> None:
     # enough to hold 2x video segment worth of frames to prevent stutter during disk writes
     raw_queue: queue.Queue = queue.Queue(maxsize=args.fps * args.duration * 2)
 
+    # Start motion parquet writer if configured
+    motion_writer: Optional[MotionParquetWriter] = None
+    if args.motion_output is not None:
+        detector: MotionDetector = MotionDetector(
+            fps=0.0,
+            grid_x=args.motion_grid_x,
+            grid_y=args.motion_grid_y,
+            sensitivity=args.motion_sensitivity,
+            sensitivity_threshold=args.motion_sensitivity_threshold,
+            use_kalman=not args.no_kalman,
+            kalman_q=args.kalman_q,
+            kalman_r=args.kalman_r,
+            warmup_s=args.motion_warmup,
+        )
+        motion_writer = MotionParquetWriter(
+            output_dir=args.motion_output,
+            detector=detector,
+            flush_threshold=100_000,
+        )
+        motion_writer.start()
+
     # Initialize video writer manager with explicit resolved dimensions
     manager: C3VideoWriterManager = C3VideoWriterManager(
         output_dir=args.output_dir,
@@ -448,6 +524,7 @@ def main() -> None:
         quality_min=args.quality_min,
         quality_max=args.quality_max,
         encoder=args.encoder,
+        motion_writer=motion_writer,
     )
 
     # Start the worker writing thread
@@ -543,6 +620,10 @@ def main() -> None:
         t.join(timeout=2.0)
     raw_queue.put(None)  # Sentinel triggers safe termination
     writer_thread.join(timeout=15.0)
+
+    if motion_writer is not None:
+        logger.info("Stopping motion parquet writer...")
+        motion_writer.stop(timeout=15.0)
 
     logger.info("Recording process successfully finalized.")
 

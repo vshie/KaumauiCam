@@ -10,4 +10,14 @@ depthai==2.29.0.0
 # the stereo recorder dies on import. PyGObject/GStreamer come from apt --
 # see the Dockerfile -- because building them from a wheel needs the whole
 # girepository/cairo toolchain.
-numpy>=1.21,<3
+numpy>=2.0.2,<3
+# Motion detection in the vendored c3record (motion_detector.py /
+# motion_writer.py): numba JITs the grid motion-cell kernel, filterpy
+# provides the Kalman smoother, Pillow decodes the color JPEGs at
+# thumbnail scale, and polars writes the per-frame Parquet output. polars
+# is also what app/stereo_motion.py uses to read those files back for the
+# Live tab. Floors match upstream record_c3's pyproject.
+numba>=0.60.0
+filterpy>=1.4.5
+pillow>=10.0.0
+polars>=1.0.0

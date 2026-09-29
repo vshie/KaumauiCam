@@ -83,6 +83,20 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # vaapi = hardware H.264 on the Intel GPU; default = software x264,
         # which costs a lot of CPU for three simultaneous streams.
         "encoder": "vaapi",
+        # Motion detection on the color stream (c3record motion_detector.py).
+        # Defaults are upstream record_c3's CLI defaults. When enabled, the
+        # child writes per-frame motion scores as Parquet to a
+        # ``stereo_motion`` folder beside the stereo MKVs; the Live tab reads
+        # them back via app/stereo_motion.py.
+        "motion_enabled": True,
+        "motion_grid_x": 16,
+        "motion_grid_y": 12,
+        "motion_sensitivity": 0.8,
+        "motion_sensitivity_threshold": 0.05,
+        "kalman_enabled": True,
+        "kalman_q": 0.01,
+        "kalman_r": 0.05,
+        "motion_warmup": 3.0,
     },
     "monthly_quota_gb": 100.0,
     "bandwidth_overhead_pct": 3.0,

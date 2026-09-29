@@ -11,6 +11,9 @@ import queue
 import gi
 import numpy as np  # noqa: E402
 
+from motion_detector import MotionDetector
+from motion_writer import MotionParquetWriter
+
 # Ensure GStreamer is available and initialized
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst  # noqa: E402
@@ -224,7 +227,7 @@ class ArchiveC3VideoWriter:
         encoder_map = {
             "default": "x264enc",
             "nvidia": "nvh264enc",
-            "vaapi": "vaapih264enc"
+            "vaapi": "vaapih264enc",
         }
         enc_element = encoder_map.get(self.encoder, "x264enc")
 
@@ -348,37 +351,37 @@ class ArchiveC3VideoWriter:
 
                 elif self.encoder == "nvidia":
                     if self.bitrate_control.lower() == "vbr":
-                        encoder.set_property("rc-mode", 3) # VBR
+                        encoder.set_property("rc-mode", 3)  # VBR
                         if self.max_bitrate is not None:
                             encoder.set_property("max-bitrate", self.max_bitrate)
                         if self.bitrate > 0:
                             encoder.set_property("bitrate", self.bitrate)
                     else:
-                        encoder.set_property("rc-mode", 2) # CBR
+                        encoder.set_property("rc-mode", 2)  # CBR
                         encoder.set_property("bitrate", self.bitrate)
-                    
+
                     encoder.set_property("gop-size", self.gop_size)
                     encoder.set_property("bframes", self.bframes)
 
                     if self.tune and self.tune.lower() == "zerolatency":
                         encoder.set_property("zerolatency", True)
-                    
+
                     # NVIDIA preset mapping (simplified)
                     preset_key: str = self.speed_preset.lower()
                     if preset_key in ["ultrafast", "superfast", "veryfast"]:
-                        encoder.set_property("preset", 1) # hp - High Performance
+                        encoder.set_property("preset", 1)  # hp - High Performance
                     elif preset_key in ["slow", "slower", "veryslow"]:
-                        encoder.set_property("preset", 2) # hq - High Quality
+                        encoder.set_property("preset", 2)  # hq - High Quality
                     else:
-                        encoder.set_property("preset", 0) # default
+                        encoder.set_property("preset", 0)  # default
 
                 elif self.encoder == "vaapi":
                     encoder.set_property("bitrate", self.bitrate)
                     if self.bitrate_control.lower() == "vbr":
-                        encoder.set_property("rate-control", 4) # VBR
+                        encoder.set_property("rate-control", 4)  # VBR
                     else:
-                        encoder.set_property("rate-control", 2) # CBR
-                    
+                        encoder.set_property("rate-control", 2)  # CBR
+
                     encoder.set_property("keyframe-period", self.gop_size)
                     # Note: VAAPI doesn't have a direct "zerolatency" property in the same way,
                     # but setting tune="zerolatency" can be ignored or handled if needed.
@@ -1069,6 +1072,7 @@ class C3VideoWriterManager:
         quality_min: Optional[int] = None,
         quality_max: Optional[int] = None,
         encoder: str = "default",
+        motion_writer: Optional[MotionParquetWriter] = None,
     ) -> None:
         """Initializes the segmented C3 video manager.
 
@@ -1094,6 +1098,8 @@ class C3VideoWriterManager:
             max_bitrate: Optional maximum H.264 video encoding bitrate in kbit/sec.
             quality_min: Optional minimum quality boundary (qp-max) for VBR.
             quality_max: Optional maximum quality boundary (qp-min) for VBR.
+            encoder: Video encoder to use.
+            motion_writer: Optional MotionParquetWriter instance to collect motion metrics.
         """
         self.output_dir: str = os.path.abspath(output_dir)
         self.output_format: str = output_format
@@ -1111,6 +1117,7 @@ class C3VideoWriterManager:
         self.quality_min: Optional[int] = quality_min
         self.quality_max: Optional[int] = quality_max
         self.encoder: str = encoder
+        self.motion_writer: Optional[MotionParquetWriter] = motion_writer
 
         # Store resolutions
         self._width_center: int = w_center
@@ -1122,8 +1129,14 @@ class C3VideoWriterManager:
 
         self.current_writer: Optional[ArchiveC3VideoWriter] = None
         self.segment_start_time: Optional[datetime] = None
+        self.current_frame_id: int = 0
 
         os.makedirs(self.output_dir, exist_ok=True)
+
+    @property
+    def motion_detector(self) -> Optional[MotionDetector]:
+        """Provides access to the MotionDetector from motion_writer if present."""
+        return self.motion_writer.detector if self.motion_writer is not None else None
 
     def write_frame(
         self,
@@ -1145,13 +1158,12 @@ class C3VideoWriterManager:
             elapsed: float = (timestamp - self.segment_start_time).total_seconds()
             if elapsed >= self.duration:
                 logger.info(
-                    "Segment duration %s exceeded (elapsed: %.2f s). Rotating to new video file...",
-                    self.duration,
-                    elapsed,
+                    f"Segment duration {self.duration} exceeded (elapsed: {elapsed:.2f} s). Rotating to new video file..."
                 )
                 self.current_writer.close()
                 self.current_writer = None
                 self.segment_start_time = None
+                self.current_frame_id = 0
 
         # Initialize the current writer if not currently active
         if self.current_writer is None:
@@ -1161,7 +1173,7 @@ class C3VideoWriterManager:
                 filename += ".mkv"
 
             filepath: str = os.path.join(self.output_dir, filename)
-            logger.info("Opening new video segment: %s", filepath)
+            logger.info(f"Opening new video segment: {filepath}")
 
             self.current_writer = ArchiveC3VideoWriter(
                 filepath=filepath,
@@ -1186,8 +1198,16 @@ class C3VideoWriterManager:
                 encoder=self.encoder,
             )
             self.segment_start_time = timestamp
+            self.current_frame_id = 0
+
+        if self.motion_writer is not None:
+            file_name: str = os.path.basename(self.current_writer.filepath)
+            self.motion_writer.enqueue_frame(
+                center_bytes, file_name, self.current_frame_id, timestamp
+            )
 
         self.current_writer.write(center_bytes, left_bytes, right_bytes, timestamp)
+        self.current_frame_id += 1
 
     def close(self) -> None:
         """Closes and finalizes any active video writer segment."""
@@ -1196,3 +1216,4 @@ class C3VideoWriterManager:
             self.current_writer.close()
             self.current_writer = None
             self.segment_start_time = None
+            self.current_frame_id = 0

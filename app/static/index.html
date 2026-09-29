@@ -103,7 +103,7 @@
               <div class="live-frame">
                 <video ref="liveVideo" playsinline autoplay muted></video>
               </div>
-              <aside class="wq-column wq-column-right" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1 }">
+              <aside class="wq-column wq-column-right wq-column-snap" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1 }">
                 <div
                   v-for="p in wqRightParams"
                   :key="'wq-right-' + p.id"
@@ -146,6 +146,17 @@
                     <img :src="kmUrl('api/stereo/snapshot.jpg?t=' + stereoSnapTs)" alt="Latest C3 stereo camera color frame" />
                   </div>
                   <p class="wq-chart-status" v-else>No stereo footage yet.</p>
+                  <div class="c3-motion">
+                    <div class="c3-motion-head">Recent motion</div>
+                    <p class="c3-motion-empty" v-if="!stereoMotion.enabled">Motion detection off.</p>
+                    <p class="c3-motion-empty" v-else-if="!stereoMotion.events.length">No motion yet.</p>
+                    <ol class="c3-motion-list" v-else>
+                      <li v-for="ev in stereoMotion.events" :key="ev.start_epoch" :title="ev.file_name + ' · peak ' + ev.peak.toFixed(2)">
+                        <span>{{ formatHstClock(ev.start_epoch) }}</span>
+                        <span class="c3-motion-dur">{{ formatMotionDuration(ev.duration_secs) }}</span>
+                      </li>
+                    </ol>
+                  </div>
                 </div>
               </aside>
             </div>
@@ -503,6 +514,56 @@
                   </div>
                 </div>
                 <p class="status-line hint">{{ stereoBitrateEstimate }}</p>
+              </details>
+              <details class="adv" open>
+                <summary>Motion detection</summary>
+                <p class="status-line hint">Scores every colour frame for motion while the stereo camera records, and saves the scores as Parquet files in <code>{{ stereoMotionDirText }}</code>. The Live tab lists the last 5 motion events. Results are saved when each burst ends, and changes apply from the next burst.</p>
+                <label class="ck-row">
+                  <input type="checkbox" v-model="stereoTun.motion_enabled" />
+                  Enable motion detection
+                </label>
+                <h3 class="adv-h">Detector</h3>
+                <div class="row">
+                  <div>
+                    <label>Grid columns (1–64)</label>
+                    <input type="number" v-model.number="stereoTun.motion_grid_x" min="1" max="64" step="1" :disabled="!stereoTun.motion_enabled" />
+                  </div>
+                  <div>
+                    <label>Grid rows (1–64)</label>
+                    <input type="number" v-model.number="stereoTun.motion_grid_y" min="1" max="64" step="1" :disabled="!stereoTun.motion_enabled" />
+                  </div>
+                  <div>
+                    <label>Warmup (seconds, 0–60)</label>
+                    <input type="number" v-model.number="stereoTun.motion_warmup" min="0" max="60" step="0.5" :disabled="!stereoTun.motion_enabled" />
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label>Pixel sensitivity (0–1)</label>
+                    <input type="number" v-model.number="stereoTun.motion_sensitivity" min="0" max="1" step="0.01" :disabled="!stereoTun.motion_enabled" />
+                  </div>
+                  <div>
+                    <label>Motion threshold (0–1)</label>
+                    <input type="number" v-model.number="stereoTun.motion_sensitivity_threshold" min="0" max="1" step="0.005" :disabled="!stereoTun.motion_enabled" />
+                  </div>
+                </div>
+                <p class="status-line hint">Pixel sensitivity: higher means smaller brightness changes count. Motion threshold: the smoothed fraction of grid cells that must be active for a frame to count as motion. Warmup: seconds ignored at the start of each burst while white balance settles.</p>
+                <h3 class="adv-h">Smoothing</h3>
+                <label class="ck-row">
+                  <input type="checkbox" v-model="stereoTun.kalman_enabled" :disabled="!stereoTun.motion_enabled" />
+                  Kalman smoothing
+                </label>
+                <div class="row">
+                  <div>
+                    <label>Kalman Q, process noise (0–10)</label>
+                    <input type="number" v-model.number="stereoTun.kalman_q" min="0" max="10" step="0.001" :disabled="!stereoTun.motion_enabled || !stereoTun.kalman_enabled" />
+                  </div>
+                  <div>
+                    <label>Kalman R, measurement noise (0–10)</label>
+                    <input type="number" v-model.number="stereoTun.kalman_r" min="0" max="10" step="0.001" :disabled="!stereoTun.motion_enabled || !stereoTun.kalman_enabled" />
+                  </div>
+                </div>
+                <p class="status-line hint">A higher Q follows changes faster. A higher R smooths more heavily.</p>
               </details>
               <div class="row">
                 <button type="button" class="btn" @click="saveStereo">Save</button>
@@ -1109,6 +1170,15 @@
                   speed_preset: "medium",
                   tune: "zerolatency",
                   encoder: "vaapi",
+                  motion_enabled: true,
+                  motion_grid_x: 16,
+                  motion_grid_y: 12,
+                  motion_sensitivity: 0.8,
+                  motion_sensitivity_threshold: 0.05,
+                  kalman_enabled: true,
+                  kalman_q: 0.01,
+                  kalman_r: 0.05,
+                  motion_warmup: 3.0,
                 },
                 stereoSpeedPresets: [
                   "ultrafast", "superfast", "veryfast", "faster", "fast",
@@ -1154,6 +1224,8 @@
                 // segment does, so unchanged frames aren't re-downloaded.
                 stereoSnap: { available: false },
                 stereoSnapTs: 0,
+                // Last few motion events from the C3 motion Parquet output.
+                stereoMotion: { enabled: true, events: [] },
                 // Root-level clock for the snapshot's "Ns ago" label (the
                 // ScheduleEditor component keeps its own separate nowTick).
                 snapNow: Date.now(),
@@ -1405,6 +1477,9 @@
                 if (s < 5400) return Math.round(s / 60) + "m ago";
                 if (s < 172800) return Math.round(s / 3600) + "h ago";
                 return Math.round(s / 86400) + "d ago";
+              },
+              stereoMotionDirText: function () {
+                return (this.stereoStatus && this.stereoStatus.motion_dir) || "stereo_motion/";
               },
               stereoSnapCapturedText: function () {
                 var e = this.stereoSnap && this.stereoSnap.captured_epoch;
@@ -1890,6 +1965,39 @@
                     self.stereoFiles = (list && list.files) || [];
                   })
                   .catch(function () {});
+              },
+              pollStereoMotion: function () {
+                var self = this;
+                if (this.tab !== "live") return;
+                this.api("GET", "/api/stereo/motion/recent?limit=5")
+                  .then(function (m) {
+                    self.stereoMotion = {
+                      enabled: !!(m && m.enabled),
+                      events: (m && m.events) || [],
+                    };
+                  })
+                  .catch(function () {});
+              },
+              formatHstClock: function (epochSecs) {
+                try {
+                  return new Intl.DateTimeFormat(undefined, {
+                    timeZone: SCHEDULE_TIMEZONE,
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false,
+                  }).format(new Date(epochSecs * 1000));
+                } catch (e) {
+                  return new Date(epochSecs * 1000).toLocaleTimeString();
+                }
+              },
+              formatMotionDuration: function (secs) {
+                var s = Math.max(0, Math.round(Number(secs) || 0));
+                if (s < 1) return "<1s";
+                if (s < 90) return s + "s";
+                return Math.round(s / 60) + "m";
               },
               pollStereoSnapshot: function () {
                 var self = this;
@@ -2516,6 +2624,7 @@
                 if (v === "live") {
                   this.startLive();
                   this.pollStereoSnapshot();
+                  this.pollStereoMotion();
                 } else this.stopLive();
               },
               draftYt: {
@@ -2554,6 +2663,7 @@
                 self.pollRec();
                 self.pollStereo();
                 self.pollStereoSnapshot();
+                self.pollStereoMotion();
                 self.pollStorage();
                 self.pollLink();
                 self.pollOrca();
@@ -2573,6 +2683,9 @@
               setInterval(function () {
                 self.pollStereoSnapshot();
               }, 15000);
+              setInterval(function () {
+                self.pollStereoMotion();
+              }, 30000);
               setInterval(function () {
                 self.snapNow = Date.now();
               }, 1000);

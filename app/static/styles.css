@@ -417,12 +417,52 @@ button.btn-danger {
   overflow: hidden;
 }
 
+/* Right column: two graphs plus a taller C3 tile (snapshot + motion list). */
+.wq-column.wq-column-snap {
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr);
+}
+
 /* C3 stereo snapshot tile: same frame as a graph, image letterboxed. */
 .c3-snap-body {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
   margin-top: 0.25rem;
+}
+
+.c3-motion {
+  flex: 0 0 auto;
+  margin-top: 0.3rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.c3-motion-head {
+  font-weight: 600;
+  opacity: 0.8;
+  margin-bottom: 0.1rem;
+}
+
+.c3-motion-empty {
+  margin: 0;
+  opacity: 0.6;
+}
+
+.c3-motion-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.c3-motion-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.c3-motion-dur {
+  opacity: 0.7;
 }
 
 .c3-snap-body img {
@@ -530,6 +570,7 @@ button.btn-danger {
   .wq-chart-unit  { font-size: 0.9rem; }
   .wq-chart-value { font-size: 1.1rem; }
   .wq-chart-axis  { font-size: 0.75rem; }
+  .c3-motion      { font-size: 0.95rem; }
 }
 
 /* Narrow viewports: drop the two side columns to horizontal chart rows
@@ -543,6 +584,9 @@ button.btn-danger {
   .wq-column {
     grid-template-columns: repeat(var(--wq-rows, 3), minmax(0, 1fr));
     grid-template-rows: minmax(100px, 1fr);
+  }
+  .wq-column.wq-column-snap {
+    grid-template-rows: minmax(160px, 1fr);
   }
 }
 
