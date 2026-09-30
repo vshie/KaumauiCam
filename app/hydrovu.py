@@ -1,11 +1,17 @@
 """HydroVu water-quality scraper.
 
 Uses the public-access token from the printed instructions
-(``https://www.hydrovu.com/#/?token=...``) to fetch the last seven days
-of measurements from the Wailoa Sensor on Hawai'i Sea Grant's HydroVu
-account. Runs on a background thread, refreshes once per hour, caches
-the reduced series to ``/app/data/hydrovu_cache.json`` for the Live tab,
-and appends newly-seen samples to ``/app/data/hydrovu.csv``.
+(``https://www.hydrovu.com/#/?token=...``) to fetch measurements from the
+Wailoa Sensor on Hawai'i Sea Grant's HydroVu account. Runs on a
+background thread and refreshes once per hour.
+
+``/app/data/hydrovu.csv`` is the source of truth: each poll asks HydroVu
+only for the time slice holding our newest sample (plus anything after
+it), merges newly-seen samples into the CSV, and the Live tab charts the
+whole CSV. History therefore keeps accumulating even after it ages out of
+what HydroVu will return for a short window. The first poll after a
+process start (or a CSV delete) backfills ``BACKFILL_SECS`` so gaps from
+downtime get filled.
 
 The HydroVu endpoints are undocumented; they are the same ones the
 public dashboard SPA calls. The token is exchanged for a short-lived
@@ -54,7 +60,6 @@ DEFAULT_INTERVAL_S = 3600.0
 RETRY_BACKOFF_S = 300.0
 
 # --- Storage ---------------------------------------------------------------
-CACHE_PATH = os.environ.get("WAILOA_HYDROVU_CACHE", "/app/data/hydrovu_cache.json")
 CSV_PATH = os.environ.get("WAILOA_HYDROVU_CSV", "/app/data/hydrovu.csv")
 
 # --- Series schema ---------------------------------------------------------
@@ -76,14 +81,15 @@ CSV_HEADER: Tuple[str, ...] = (
     *[p[3] for p in PARAMS],
 )
 
-WINDOW_SECS = 7 * 24 * 3600
+# How far back the first poll after a start (or a CSV delete) reaches, to
+# fill gaps left while the extension was down. Later polls are incremental.
+BACKFILL_SECS = 30 * 24 * 3600
 
-# Length of one HydroVu time slice at resolution 13 (measured: consecutive
-# ``time_slice`` keys differ by exactly 491520 s, ~5.7 days). The
-# ``timeSlice >=`` filter matches a slice by its *start*, so a slice that
-# began before the window start is dropped even though most of its samples
-# fall inside the window -- the chart then only showed data since the most
-# recent slice boundary. Query one slice further back and trim the points.
+# Length of one HydroVu time slice at resolution 13 (measured: ``time_slice``
+# keys are exact multiples of 491520 s, ~5.7 days, since the epoch). The
+# ``timeSlice >=`` filter matches a slice by its *start*, so a query window
+# starting mid-slice silently drops that whole slice. Always start queries
+# on a slice boundary (``_slice_start``).
 SLICE_SECS = 491520
 
 # --- Module state ----------------------------------------------------------
@@ -99,6 +105,9 @@ _last_error_ts: float = 0.0
 _last_series_points: Dict[str, int] = {}
 _cached_company_id: Optional[str] = None
 _cached_location_id: Optional[int] = None
+_backfill_done = False
+# Parsed CSV memo for ``series()``, keyed by (mtime_ns, size).
+_series_memo: Tuple[Tuple[int, int], Dict[str, Dict[str, Any]]] = ((0, 0), {})
 
 
 # --- Token helpers ---------------------------------------------------------
@@ -240,7 +249,11 @@ def _fetch_measurements(
 # --- Series reduction ------------------------------------------------------
 
 
-def _reduce_series(payload: Dict[str, Any], since_ms: int = 0) -> Dict[str, Dict[str, Any]]:
+def _slice_start(secs: int) -> int:
+    return (int(secs) // SLICE_SECS) * SLICE_SECS
+
+
+def _reduce_series(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Turn the measurement payload into ``{param: {unit, points: [[ms, v], ...]}}``.
 
     HydroVu returns each parameter's ``raw`` list as a mix of samples and
@@ -266,7 +279,7 @@ def _reduce_series(payload: Dict[str, Any], since_ms: int = 0) -> Dict[str, Dict
                     continue
                 t = sample.get("time")
                 v = sample.get("value")
-                if t is None or v is None or int(t) < since_ms:
+                if t is None or v is None:
                     continue
                 try:
                     by_time[int(t)] = float(v)
@@ -286,37 +299,6 @@ def _ensure_dir(path: str) -> None:
         os.makedirs(d, exist_ok=True)
 
 
-def _atomic_write(path: str, text: str) -> None:
-    _ensure_dir(path)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.replace(tmp, path)
-
-
-def _load_cache() -> Dict[str, Any]:
-    if not os.path.isfile(CACHE_PATH):
-        return {"series": {}, "fetched_ts": 0}
-    try:
-        with open(CACHE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f) or {"series": {}, "fetched_ts": 0}
-    except (OSError, ValueError):
-        return {"series": {}, "fetched_ts": 0}
-
-
-def _write_cache(series: Dict[str, Dict[str, Any]], fetched_ts: float, location_id: Optional[int]) -> None:
-    body = {
-        "series": series,
-        "fetched_ts": fetched_ts,
-        "location_id": location_id,
-        "params": [
-            {"id": pid, "label": label, "unit": unit, "column": col}
-            for pid, label, unit, col in PARAMS
-        ],
-    }
-    _atomic_write(CACHE_PATH, json.dumps(body, separators=(",", ":")))
-
-
 def _iso_hst(ms: int) -> str:
     """HST is a stable UTC-10 offset (Hawaii doesn't observe DST), so we
     format the timestamp without pulling in tzdata."""
@@ -324,41 +306,48 @@ def _iso_hst(ms: int) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S-10:00", time.gmtime(secs))
 
 
-def _read_csv_timestamps() -> Tuple[set, List[str]]:
-    """Return (set of epoch-ms strings already in the CSV, current header).
+def _read_csv() -> Dict[int, List[str]]:
+    """Return ``{epoch_secs: row_cells}`` for every sample in the CSV.
 
-    An empty file (either missing or header-only) returns an empty set
-    and no header. Keeping timestamps as strings avoids float rounding
-    when we compare against the ints we'd write.
+    Cells are kept as the strings on disk so a rewrite doesn't reformat
+    old rows. A missing, empty or header-only file returns ``{}``.
     """
+    rows: Dict[int, List[str]] = {}
     if not os.path.isfile(CSV_PATH):
-        return set(), []
-    have: set = set()
-    header: List[str] = []
+        return rows
     try:
         with open(CSV_PATH, "r", encoding="utf-8", newline="") as f:
             reader = csv.reader(f)
-            first = next(reader, None)
-            if first:
-                header = [c.strip() for c in first]
+            header = [c.strip() for c in (next(reader, None) or [])]
             try:
                 epoch_idx = header.index("timestamp_epoch")
             except ValueError:
                 epoch_idx = 1
             for row in reader:
-                if len(row) > epoch_idx:
-                    have.add(row[epoch_idx].strip())
+                if len(row) <= epoch_idx:
+                    continue
+                try:
+                    rows[int(row[epoch_idx].strip())] = row
+                except ValueError:
+                    continue
     except OSError:
-        return set(), []
-    return have, header
+        return {}
+    return rows
 
 
-def _append_new_rows(series: Dict[str, Dict[str, Any]]) -> int:
-    """Merge new measurement timestamps into ``hydrovu.csv``. Returns rows added.
+def _newest_csv_secs() -> Optional[int]:
+    rows = _read_csv()
+    return max(rows) if rows else None
 
-    Rows are keyed by ``timestamp_epoch``: a scrape returns the whole
-    last week every hour, so without this dedup the file would grow by
-    ~600 rows per poll instead of the couple of dozen fresh ones.
+
+def _merge_rows(series: Dict[str, Dict[str, Any]]) -> int:
+    """Merge newly-seen samples into ``hydrovu.csv``. Returns rows added.
+
+    Rows are keyed by ``timestamp_epoch``; samples we already have are
+    skipped, so re-fetching an overlapping slice adds nothing. New samples
+    newer than everything on disk (the normal hourly case) are appended;
+    if a backfill found older ones (a gap from downtime) the file is
+    rewritten in time order instead.
     """
     # Union of all times seen across parameters -- some rows may only
     # populate a subset when a probe hiccups.
@@ -368,31 +357,71 @@ def _append_new_rows(series: Dict[str, Dict[str, Any]]) -> int:
         for ms, v in s.get("points") or []:
             row = by_ts.setdefault(int(ms), {})
             row[col] = float(v)
-    if not by_ts:
+    have = _read_csv()
+    new: Dict[int, List[str]] = {}
+    for ms in sorted(by_ts):
+        secs = ms // 1000
+        if secs in have or secs in new:
+            continue
+        vals = by_ts[ms]
+        new[secs] = [
+            _iso_hst(ms),
+            str(secs),
+            *[_format(vals.get(col)) for _pid, _label, _unit, col in PARAMS],
+        ]
+    if not new:
         return 0
     _ensure_dir(CSV_PATH)
-    have, existing = _read_csv_timestamps()
-    new_file = not existing
-    added = 0
-    with open(CSV_PATH, "a", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        if new_file:
+    if have and min(new) < max(have):
+        merged = {**have, **new}
+        tmp = CSV_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
             writer.writerow(CSV_HEADER)
-        for ms in sorted(by_ts.keys()):
-            secs = ms // 1000
-            key = str(secs)
-            if key in have:
+            for secs in sorted(merged):
+                writer.writerow(merged[secs])
+        os.replace(tmp, CSV_PATH)
+    else:
+        new_file = not os.path.isfile(CSV_PATH) or os.path.getsize(CSV_PATH) == 0
+        with open(CSV_PATH, "a", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            if new_file:
+                writer.writerow(CSV_HEADER)
+            for secs in sorted(new):
+                writer.writerow(new[secs])
+    return len(new)
+
+
+def _collected_series() -> Dict[str, Dict[str, Any]]:
+    """Every sample in the CSV as ``{param: {unit, points: [[ms, v], ...]}}``.
+
+    Memoized on the file's mtime/size: the Live tab polls this far more
+    often than the CSV changes.
+    """
+    global _series_memo
+    try:
+        st = os.stat(CSV_PATH)
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = (0, 0)
+    if key == _series_memo[0] and _series_memo[1]:
+        return _series_memo[1]
+    rows = _read_csv()
+    out: Dict[str, Dict[str, Any]] = {}
+    for i, (pid, _label, unit, _col) in enumerate(PARAMS):
+        idx = 2 + i
+        points = []
+        for secs in sorted(rows):
+            row = rows[secs]
+            if len(row) <= idx or not row[idx].strip():
                 continue
-            row = by_ts[ms]
-            cells = [
-                _iso_hst(ms),
-                key,
-                *[_format(row.get(col)) for _pid, _label, _unit, col in PARAMS],
-            ]
-            writer.writerow(cells)
-            have.add(key)
-            added += 1
-    return added
+            try:
+                points.append([secs * 1000, float(row[idx])])
+            except ValueError:
+                continue
+        out[pid] = {"unit": unit, "points": points}
+    _series_memo = (key, out)
+    return out
 
 
 def _format(v: Optional[float]) -> str:
@@ -456,12 +485,13 @@ def _token(cfg: Dict[str, Any]) -> str:
 def _poll_once(cfg: Dict[str, Any]) -> Tuple[bool, str]:
     """One end-to-end scrape. Returns (ok, message).
 
-    On success writes the JSON cache and appends any newly-seen samples
-    to the CSV. On failure keeps the existing cache/CSV untouched so a
-    transient HydroVu blip doesn't blank the graphs.
+    Fetches from the slice holding our newest sample (or ``BACKFILL_SECS``
+    back on the first poll) and merges newly-seen samples into the CSV.
+    On failure the CSV is untouched, so a HydroVu blip never blanks the
+    graphs.
     """
     global _last_fetched_ts, _last_error, _last_error_ts, _last_series_points
-    global _cached_company_id, _cached_location_id
+    global _cached_company_id, _cached_location_id, _backfill_done
     token = _token(cfg)
     if not token:
         return False, "no token configured"
@@ -479,30 +509,30 @@ def _poll_once(cfg: Dict[str, Any]) -> Tuple[bool, str]:
     else:
         location_id = _cached_location_id
     now_s = int(time.time())
-    since = now_s - WINDOW_SECS
+    newest = _newest_csv_secs()
+    backfill = newest is None or not _backfill_done
+    since_secs = now_s - BACKFILL_SECS if backfill else newest
     try:
         payload = _fetch_measurements(
-            session_bearer, company_id, location_id, since - SLICE_SECS, now_s
+            session_bearer, company_id, location_id, _slice_start(since_secs), now_s
         )
     except Exception as e:
         return False, f"measurement fetch: {e}"
-    series = _reduce_series(payload, since_ms=since * 1000)
-    fetched_ts = time.time()
+    series = _reduce_series(payload)
     try:
-        _write_cache(series, fetched_ts, location_id)
+        added = _merge_rows(series)
     except OSError as e:
-        logger.warning("hydrovu: cache write failed: %s", e)
-    try:
-        added = _append_new_rows(series)
-    except OSError as e:
-        logger.warning("hydrovu: csv append failed: %s", e)
-        added = 0
+        logger.warning("hydrovu: csv merge failed: %s", e)
+        return False, f"csv merge: {e}"
+    _backfill_done = True
+    collected = _collected_series()
     with _state_lock:
-        _last_fetched_ts = fetched_ts
+        _last_fetched_ts = time.time()
         _last_error = None
         _last_error_ts = 0.0
-        _last_series_points = {pid: len(series[pid]["points"]) for pid in series}
-    return True, f"ok · {added} new row{'' if added == 1 else 's'}"
+        _last_series_points = {pid: len(collected[pid]["points"]) for pid in collected}
+    kind = "backfill" if backfill else "incremental"
+    return True, f"ok ({kind}) · {added} new row{'' if added == 1 else 's'}"
 
 
 def _loop() -> None:
@@ -551,11 +581,7 @@ def start(get_cfg: Callable[[], Dict[str, Any]]) -> None:
     _stop.clear()
     _thread = threading.Thread(target=_loop, daemon=True, name="hydrovu-poller")
     _thread.start()
-    logger.info(
-        "hydrovu poller thread started (cache=%s csv=%s)",
-        CACHE_PATH,
-        CSV_PATH,
-    )
+    logger.info("hydrovu poller thread started (csv=%s)", CSV_PATH)
 
 
 def stop() -> None:
@@ -585,7 +611,6 @@ def status() -> Dict[str, Any]:
         "last_error": err,
         "last_error_ts": err_ts or None,
         "series_points": pts,
-        "cache_path": CACHE_PATH,
         "csv_path": CSV_PATH,
         "csv_size_bytes": _file_size(CSV_PATH),
         "rows_logged": _row_count(),
@@ -594,9 +619,15 @@ def status() -> Dict[str, Any]:
 
 
 def series() -> Dict[str, Any]:
-    """Latest cached series for the Live tab. Also returns the parameter
+    """Every collected sample for the Live tab, plus the parameter
     metadata so the client doesn't have to hard-code labels/units."""
-    body = _load_cache()
+    with _state_lock:
+        fetched = _last_fetched_ts
+    body: Dict[str, Any] = {
+        "series": _collected_series(),
+        "fetched_ts": fetched,
+        "location_id": _cached_location_id,
+    }
     body["params"] = [
         {"id": pid, "label": label, "unit": unit, "column": col}
         for pid, label, unit, col in PARAMS
@@ -629,7 +660,9 @@ def csv_preview(max_rows: int = 5) -> str:
 
 
 def delete_csv() -> Dict[str, Any]:
-    """Wipe the cumulative CSV; logging continues on the next poll."""
+    """Wipe the cumulative CSV; the next poll backfills ``BACKFILL_SECS``."""
+    global _backfill_done
+    _backfill_done = False
     deleted = False
     try:
         if os.path.isfile(CSV_PATH):

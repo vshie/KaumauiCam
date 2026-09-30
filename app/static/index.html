@@ -84,7 +84,7 @@
                       viewBox="0 0 200 80"
                       preserveAspectRatio="none"
                       role="img"
-                      :aria-label="p.label + ' over last 7 days'"
+                      :aria-label="p.label + ' history'"
                     >
                       <line v-for="y in [20, 40, 60]" :key="'g' + p.id + y" :x1="0" :x2="200" :y1="y" :y2="y" class="wq-grid" />
                       <polyline
@@ -121,7 +121,7 @@
                       viewBox="0 0 200 80"
                       preserveAspectRatio="none"
                       role="img"
-                      :aria-label="p.label + ' over last 7 days'"
+                      :aria-label="p.label + ' history'"
                     >
                       <line v-for="y in [20, 40, 60]" :key="'g' + p.id + y" :x1="0" :x2="200" :y1="y" :y2="y" class="wq-grid" />
                       <polyline
@@ -674,7 +674,7 @@
                 Water quality (HydroVu)
                 <span class="badge" :class="hydrovuBadgeClass">{{ hydrovuBadgeText }}</span>
               </h2>
-              <p class="status-line">Scrapes the Wailoa Sensor's salinity, turbidity, DO, pH, temperature and ORP from HydroVu on a fixed hourly cadence, caches the last 7 days for the Live tab charts, and appends new samples to <code>/app/data/hydrovu.csv</code>.</p>
+              <p class="status-line">Scrapes the Wailoa Sensor's salinity, turbidity, DO, pH, temperature and ORP from HydroVu on a fixed hourly cadence, fetching only samples newer than what it already has. New samples are merged into <code>/app/data/hydrovu.csv</code>, and the Live tab charts the full collected history.</p>
               <label class="ck-row">
                 <input type="checkbox" v-model="wqHydrovuEnabled" />
                 Enable HydroVu logging
@@ -698,7 +698,7 @@
               </div>
               <p class="status-line">{{ hydrovuStatusLine }}</p>
               <p class="status-line err" v-if="wqStatus.last_error">{{ wqStatus.last_error }}</p>
-              <h2 class="h2-spaced">Latest sample counts <span class="badge badge-muted">last 7 days</span></h2>
+              <h2 class="h2-spaced">Latest sample counts <span class="badge badge-muted">collected</span></h2>
               <div class="reading-grid" v-if="hydrovuHasPoints">
                 <div class="reading-cell" v-for="p in wqParams" :key="'wqcnt-' + p.id">
                   <span class="reading-label">{{ p.label }}</span>
@@ -1491,16 +1491,33 @@
               wqRightParams: function () {
                 return this.wqParams.filter(function (p) { return p.side === "right"; });
               },
+              wqRange: function () {
+                // x-axis spans the whole collected history (the backend
+                // charts every sample in hydrovu.csv), never less than 7
+                // days so a fresh install doesn't stretch a few hours
+                // across the full width.
+                var endMs = Date.now();
+                var startMs = endMs - 7 * 86400 * 1000;
+                var series = this.wqSeries || {};
+                for (var k in series) {
+                  var pts = (series[k] && series[k].points) || [];
+                  if (pts.length && pts[0][0] < startMs) startMs = pts[0][0];
+                }
+                return { startMs: startMs, endMs: endMs };
+              },
               wqDayLabels: function () {
-                // 7 day-of-week markers spanning the last 7 days, oldest
-                // on the left. HST is a constant UTC-10 offset so we
-                // don't need tzdata to line these up with the samples.
+                // 7 evenly spaced markers across wqRange, oldest on the
+                // left: weekday names while the span is about a week,
+                // month/day once history grows past that. HST is a
+                // constant UTC-10 offset so we don't need tzdata.
                 var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                var r = this.wqRange;
+                var span = r.endMs - r.startMs;
+                var useWeekday = span <= 8 * 86400 * 1000;
                 var out = [];
-                var now = Date.now();
-                for (var i = 6; i >= 0; i--) {
-                  var d = new Date(now - i * 86400000 - 10 * 3600 * 1000);
-                  out.push(days[d.getUTCDay()]);
+                for (var i = 0; i < 7; i++) {
+                  var d = new Date(r.startMs + (span * i) / 6 - 10 * 3600 * 1000);
+                  out.push(useWeekday ? days[d.getUTCDay()] : (d.getUTCMonth() + 1) + "/" + d.getUTCDate());
                 }
                 return out;
               },
@@ -1526,7 +1543,7 @@
                 if (!s.token_set) return "Token not set";
                 if (s.last_error) return "Fetch error";
                 if (!s.last_fetched_ts) return "Waiting for first fetch…";
-                return "No samples in the last 7 days";
+                return "No samples collected yet";
               },
               hydrovuBadgeText: function () {
                 var s = this.wqStatus || {};
@@ -2439,8 +2456,8 @@
                 // Turn the raw ``[[ms, value], ...]`` list for one parameter
                 // into the props the SVG needs: an "M x y L x y ..." string
                 // and a formatted "last value" for the header, computed off
-                // fixed axes so the chart plots consistently over the full
-                // 7-day window. Returns an empty object shape when we don't
+                // fixed axes (wqRange) so every chart shares the same time
+                // scale over the collected history. Returns an empty object shape when we don't
                 // have data yet so v-if / v-for stay safe.
                 var entry = (this.wqSeries || {})[paramId] || {};
                 var points = entry.points || [];
@@ -2456,13 +2473,12 @@
                 var lastVal = last[1];
                 out.lastValue = lastVal;
                 out.lastValueText = this.fmtWqValue(lastVal);
-                // Fixed 7-day x-axis so the head of the polyline matches
-                // "now" on every chart, and gaps in the source data show
-                // as gaps against the day-of-week labels rather than
-                // rescaling to fill the frame.
-                var nowMs = Date.now();
-                var startMs = nowMs - 7 * 86400 * 1000;
-                var span = nowMs - startMs;
+                // Shared x-axis ending at "now" on every chart, so gaps in
+                // the source data (a sensor outage) show as a flat stretch
+                // up to the right edge rather than rescaling to fill it.
+                var range = this.wqRange;
+                var startMs = range.startMs;
+                var span = range.endMs - startMs;
                 var vals = points.map(function (pt) { return pt[1]; });
                 var lo = Math.min.apply(null, vals);
                 var hi = Math.max.apply(null, vals);
