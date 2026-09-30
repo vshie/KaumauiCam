@@ -78,6 +78,14 @@ CSV_HEADER: Tuple[str, ...] = (
 
 WINDOW_SECS = 7 * 24 * 3600
 
+# Length of one HydroVu time slice at resolution 13 (measured: consecutive
+# ``time_slice`` keys differ by exactly 491520 s, ~5.7 days). The
+# ``timeSlice >=`` filter matches a slice by its *start*, so a slice that
+# began before the window start is dropped even though most of its samples
+# fall inside the window -- the chart then only showed data since the most
+# recent slice boundary. Query one slice further back and trim the points.
+SLICE_SECS = 491520
+
 # --- Module state ----------------------------------------------------------
 _state_lock = threading.Lock()
 _thread: Optional[threading.Thread] = None
@@ -232,7 +240,7 @@ def _fetch_measurements(
 # --- Series reduction ------------------------------------------------------
 
 
-def _reduce_series(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _reduce_series(payload: Dict[str, Any], since_ms: int = 0) -> Dict[str, Dict[str, Any]]:
     """Turn the measurement payload into ``{param: {unit, points: [[ms, v], ...]}}``.
 
     HydroVu returns each parameter's ``raw`` list as a mix of samples and
@@ -243,7 +251,7 @@ def _reduce_series(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     rows = (payload or {}).get("data") or []
     if not rows:
         return {pid: {"unit": unit, "points": []} for pid, _lbl, unit, _col in PARAMS}
-    # One row per HydroVu time slice (a fixed ~11-day bucket at resolution
+    # One row per HydroVu time slice (a fixed ~5.7-day bucket at resolution
     # 13), so a 7-day window that straddles a slice boundary comes back as
     # two rows. Reading only rows[0] silently dropped the newer slice.
     out: Dict[str, Dict[str, Any]] = {}
@@ -258,7 +266,7 @@ def _reduce_series(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
                     continue
                 t = sample.get("time")
                 v = sample.get("value")
-                if t is None or v is None:
+                if t is None or v is None or int(t) < since_ms:
                     continue
                 try:
                     by_time[int(t)] = float(v)
@@ -473,10 +481,12 @@ def _poll_once(cfg: Dict[str, Any]) -> Tuple[bool, str]:
     now_s = int(time.time())
     since = now_s - WINDOW_SECS
     try:
-        payload = _fetch_measurements(session_bearer, company_id, location_id, since, now_s)
+        payload = _fetch_measurements(
+            session_bearer, company_id, location_id, since - SLICE_SECS, now_s
+        )
     except Exception as e:
         return False, f"measurement fetch: {e}"
-    series = _reduce_series(payload)
+    series = _reduce_series(payload, since_ms=since * 1000)
     fetched_ts = time.time()
     try:
         _write_cache(series, fetched_ts, location_id)
