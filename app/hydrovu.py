@@ -8,8 +8,8 @@ background thread and refreshes once per hour.
 ``/app/data/hydrovu.csv`` is the source of truth: each poll asks HydroVu
 only for the time slice holding our newest sample (plus anything after
 it), merges newly-seen samples into the CSV, and the Live tab charts the
-whole CSV. History therefore keeps accumulating even after it ages out of
-what HydroVu will return for a short window. The first poll after a
+last ``CHART_WINDOW_SECS`` of it. History keeps accumulating in the CSV
+even after it ages out of the chart or of what HydroVu will return. The first poll after a
 process start (or a CSV delete) backfills ``BACKFILL_SECS`` so gaps from
 downtime get filled.
 
@@ -80,6 +80,9 @@ CSV_HEADER: Tuple[str, ...] = (
     "timestamp_epoch",
     *[p[3] for p in PARAMS],
 )
+
+# The Live tab charts only this trailing window; the CSV keeps everything.
+CHART_WINDOW_SECS = 7 * 24 * 3600
 
 # How far back the first poll after a start (or a CSV delete) reaches, to
 # fill gaps left while the extension was down. Later polls are incremental.
@@ -619,12 +622,18 @@ def status() -> Dict[str, Any]:
 
 
 def series() -> Dict[str, Any]:
-    """Every collected sample for the Live tab, plus the parameter
-    metadata so the client doesn't have to hard-code labels/units."""
+    """Collected samples from the last ``CHART_WINDOW_SECS`` for the Live
+    tab, plus the parameter metadata so the client doesn't have to
+    hard-code labels/units."""
     with _state_lock:
         fetched = _last_fetched_ts
+    cutoff_ms = (time.time() - CHART_WINDOW_SECS) * 1000
+    windowed = {
+        pid: {"unit": s["unit"], "points": [p for p in s["points"] if p[0] >= cutoff_ms]}
+        for pid, s in _collected_series().items()
+    }
     body: Dict[str, Any] = {
-        "series": _collected_series(),
+        "series": windowed,
         "fetched_ts": fetched,
         "location_id": _cached_location_id,
     }

@@ -59,7 +59,7 @@ Runtime: the entrypoint runs `python3 -u /app/main.py`. The UI/API listens on `P
 - **Persistence**:
   - SQLite `/app/data/state.db` (overridable with `WAILOA_STATE_DB`) is shared by `bandwidth.py`, `link_uptime.py` (8.8.8.8 ping every 10 s), and `youtube_monitor.py`. Each module owns its tables and a lock.
   - `orca.py` appends to `/app/data/orca.csv`. Columns are the camera's `/data` keys converted to snake_case, plus a trailing raw `payload_json`.
-  - `hydrovu.py` uses undocumented HydroVu SPA endpoints with a public token. `hydrovu.csv` is the source of truth. Hourly polls fetch only from the HydroVu time slice holding the newest CSV sample. Slices are epoch-aligned 491520 s buckets matched by start time, so a query must start on a boundary or the whole slice is dropped. The first poll after a start or a CSV delete backfills 30 days. The Live tab charts the whole CSV. All HydroVu API knowledge lives in that module.
+  - `hydrovu.py` uses undocumented HydroVu SPA endpoints with a public token. `hydrovu.csv` is the source of truth. Hourly polls fetch only from the HydroVu time slice holding the newest CSV sample. Slices are epoch-aligned 491520 s buckets matched by start time, so a query must start on a boundary or the whole slice is dropped. The first poll after a start or a CSV delete backfills 30 days. The Live tab charts the last 7 days of it (`CHART_WINDOW_SECS`). All HydroVu API knowledge lives in that module.
 - **Frontend**: a single `app/static/index.html` (Vue 3 global build, no build step) plus `styles.css`.
 
 ## Conventions
