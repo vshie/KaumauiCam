@@ -62,7 +62,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -759,40 +759,43 @@ def ensure_reusable_stream() -> Dict[str, Any]:
     }
 
 
+def _list_broadcasts(status: str) -> List[Dict[str, Any]]:
+    """All of the channel's broadcasts in ``status`` (``upcoming`` /
+    ``active`` / ``completed``), following pagination.
+
+    ``broadcastStatus`` is one of liveBroadcasts.list's mutually exclusive
+    filters (with ``id`` and ``mine``) and already scopes to the
+    authenticated channel. Sending ``mine=true`` alongside it returns
+    HTTP 400 "Incompatible parameters" -- which silently broke both the
+    existing-broadcast lookup and the stale sweep until 0.4.3.
+    """
+    items: List[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+    for _ in range(10):  # 500 broadcasts is far beyond anything we create
+        params: Dict[str, Any] = {
+            "part": "id,snippet,status,contentDetails",
+            "broadcastStatus": status,
+            "maxResults": 50,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = _api_request("GET", "liveBroadcasts", params=params)
+        items.extend(data.get("items") or [])
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return items
+
+
 def _find_existing_broadcast_today(hst_date: str, title: str) -> Optional[Dict[str, Any]]:
     """Look up an existing not-yet-completed broadcast for today. Used
     on startup when we've lost state (fresh container, empty broadcast
     state file) but a previous container already created one earlier
-    today. We match on title -- YouTube's ``mine=true`` listing
-    returns all lifecycle states, so we filter to non-terminal ones."""
-    data = _api_request(
-        "GET",
-        "liveBroadcasts",
-        params={
-            "part": "id,snippet,status,contentDetails",
-            "broadcastStatus": "upcoming",
-            "mine": "true",
-            "maxResults": 25,
-        },
-    )
-    for item in data.get("items") or []:
-        snip = item.get("snippet") or {}
-        if snip.get("title") == title:
-            return item
-    data = _api_request(
-        "GET",
-        "liveBroadcasts",
-        params={
-            "part": "id,snippet,status,contentDetails",
-            "broadcastStatus": "active",
-            "mine": "true",
-            "maxResults": 25,
-        },
-    )
-    for item in data.get("items") or []:
-        snip = item.get("snippet") or {}
-        if snip.get("title") == title:
-            return item
+    today. We match on title among upcoming and active broadcasts."""
+    for status in ("upcoming", "active"):
+        for item in _list_broadcasts(status):
+            if (item.get("snippet") or {}).get("title") == title:
+                return item
     return None
 
 
@@ -939,21 +942,12 @@ def _retire_stale_broadcasts(
     ok = True
     for status in ("upcoming", "active"):
         try:
-            data = _api_request(
-                "GET",
-                "liveBroadcasts",
-                params={
-                    "part": "id,snippet,status,contentDetails",
-                    "broadcastStatus": status,
-                    "mine": "true",
-                    "maxResults": 50,
-                },
-            )
+            listed = _list_broadcasts(status)
         except YouTubeApiError as e:
             logger.warning("stale-broadcast sweep: list %s failed: %s", status, e)
             ok = False
             continue
-        for item in data.get("items") or []:
+        for item in listed:
             snip = item.get("snippet") or {}
             if snip.get("title") == keep_title or (keep_id and item.get("id") == keep_id):
                 continue

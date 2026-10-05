@@ -286,7 +286,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.4.2"
+_EXTENSION_VERSION = "0.4.3"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
