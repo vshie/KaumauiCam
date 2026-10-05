@@ -162,6 +162,27 @@ _pending_thread: Optional[threading.Thread] = None
 # broadcast was created for; on rollover we complete + clear it.
 _broadcast: Optional[Dict[str, Any]] = None
 
+# drive_live() is called on every 2 s scheduler tick while ffmpeg runs,
+# and each real check costs 2 API units (liveBroadcasts.list +
+# liveStreams.list). Unthrottled that's ~3600 units per streaming hour
+# against the 10,000/day default quota: measured on the Kaumaui device
+# (2026-10-04) the quota was exhausted mid-day, after which no transition,
+# complete or cleanup call could succeed. Poll every 30 s until the
+# broadcast is live (the kickoff grace is 6 min, so that's ample), then
+# every 5 min just to refresh the UI status.
+DRIVE_LIVE_PENDING_INTERVAL_SECS = 30.0
+DRIVE_LIVE_LIVE_INTERVAL_SECS = 300.0
+_last_drive_ts = 0.0
+
+# The stale-broadcast sweep also runs once per process start (not only
+# when a new day's broadcast is set up), so installing an update mid-day
+# cleans up orphans immediately. Retried at most every
+# SWEEP_RETRY_SECS until it succeeds, so an exhausted quota doesn't turn
+# it into a per-tick API call.
+SWEEP_RETRY_SECS = 600.0
+_swept_ok = False
+_last_sweep_attempt = 0.0
+
 # Provider callable to fetch (client_id, client_secret) from config.
 # Wired by ``init()``. Kept as a callable rather than baked in so config
 # edits are picked up without restarting the module.
@@ -904,12 +925,18 @@ def _retire_broadcast(broadcast_id: str, lifecycle: Optional[str] = None) -> str
     return "skipped"
 
 
-def _retire_stale_broadcasts(stream_id: str, keep_title: str) -> None:
+def _retire_stale_broadcasts(
+    stream_id: str, keep_title: str, keep_id: Optional[str] = None
+) -> bool:
     """Retire every auto-created, non-terminal broadcast bound to our
     persistent stream except today's (matched by ``keep_title``). Runs
     once per day/restart, before today's broadcast is set up, so orphans
     left by outages can't be auto-started. Best-effort: failures are
-    logged and retried the next time this runs."""
+    logged and retried the next time this runs. Returns True when both
+    listings succeeded."""
+    global _swept_ok, _last_sweep_attempt
+    _last_sweep_attempt = time.monotonic()
+    ok = True
     for status in ("upcoming", "active"):
         try:
             data = _api_request(
@@ -924,10 +951,11 @@ def _retire_stale_broadcasts(stream_id: str, keep_title: str) -> None:
             )
         except YouTubeApiError as e:
             logger.warning("stale-broadcast sweep: list %s failed: %s", status, e)
+            ok = False
             continue
         for item in data.get("items") or []:
             snip = item.get("snippet") or {}
-            if snip.get("title") == keep_title:
+            if snip.get("title") == keep_title or (keep_id and item.get("id") == keep_id):
                 continue
             if not str(snip.get("description") or "").startswith(AUTO_DESCRIPTION_PREFIX):
                 continue
@@ -943,6 +971,9 @@ def _retire_stale_broadcasts(stream_id: str, keep_title: str) -> None:
                 )
             except YouTubeApiError as e:
                 logger.warning("Retiring stale broadcast %s failed: %s", bid, e)
+                ok = False
+    _swept_ok = ok
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -997,6 +1028,19 @@ def ensure_todays_broadcast(
         _save_broadcast_state()
 
     if current and current.get("broadcast_id"):
+        if (
+            not _swept_ok
+            and current.get("stream_id")
+            and (
+                not _last_sweep_attempt
+                or time.monotonic() - _last_sweep_attempt >= SWEEP_RETRY_SECS
+            )
+        ):
+            _retire_stale_broadcasts(
+                current["stream_id"],
+                keep_title=current.get("title") or "",
+                keep_id=current["broadcast_id"],
+            )
         return dict(current)
 
     title = _format_title(title_template, hst)
@@ -1065,12 +1109,23 @@ def drive_live() -> Optional[str]:
     Idempotent -- if the broadcast is already live (via ``enableAuto
     Start`` or a prior tick), we do nothing beyond noting it. Errors
     are swallowed and recorded on the state dict; the next tick will
-    retry."""
-    global _broadcast
+    retry. Throttled (see ``DRIVE_LIVE_*_INTERVAL_SECS``) to protect the
+    daily API quota; between real checks it returns the last known
+    lifecycle."""
+    global _broadcast, _last_drive_ts
     with _bcast_lock:
         current = _broadcast.copy() if _broadcast else None
     if not current or not current.get("broadcast_id"):
         return None
+    interval = (
+        DRIVE_LIVE_LIVE_INTERVAL_SECS
+        if current.get("is_live")
+        else DRIVE_LIVE_PENDING_INTERVAL_SECS
+    )
+    now = time.monotonic()
+    if _last_drive_ts and now - _last_drive_ts < interval:
+        return current.get("lifecycle")
+    _last_drive_ts = now
     bid = current["broadcast_id"]
     sid = current["stream_id"]
     try:
