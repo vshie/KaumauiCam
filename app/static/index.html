@@ -19,7 +19,7 @@
   </head>
   <body>
     <script type="text/x-template" id="km-app-template">
-      <div class="vue-root">
+      <div class="vue-root" :class="{ 'is-live': tab === 'live' }">
         <header class="site-header">
           <div class="brand">
             <span class="brand-mark" aria-hidden="true"></span>
@@ -63,12 +63,14 @@
             </div>
           </div>
 
-          <section v-show="tab === 'live'" class="tab-panel">
-            <div class="grid grid-2">
-              <div class="panel panel-accent">
+          <section v-show="tab === 'live'" class="tab-panel tab-panel-live">
+            <div class="grid grid-2 live-grid">
+              <div class="panel panel-accent live-preview">
                 <h2>Preview <span class="badge">WebRTC · livepreview</span></h2>
-                <div class="video-wrap">
-                  <video ref="liveVideo" playsinline autoplay muted></video>
+                <div class="video-stage">
+                  <div class="video-wrap">
+                    <video ref="liveVideo" playsinline autoplay muted></video>
+                  </div>
                 </div>
                 <div class="row row-actions">
                   <button type="button" class="btn btn-secondary" @click="startWebRTC">Connect video</button>
@@ -388,9 +390,9 @@
         </main>
         <footer class="site-footer" role="contentinfo">
           <div class="footer-logos">
-            <span class="footer-logo" title="HuiHoʻoleimaluō">
-              <img :src="kmUrl('static/assets/hui_logo.png')" alt="HuiHoʻoleimaluō" class="footer-img footer-img-hui" width="320" height="70" loading="lazy" decoding="async" />
-            </span>
+            <a class="footer-logo footer-logo-seagrant" href="https://seagrant.soest.hawaii.edu/" target="_blank" rel="noopener noreferrer" title="University of Hawaiʻi Sea Grant">
+              <img :src="kmUrl('static/assets/sea_grant_logo.png')" alt="Sea Grant University of Hawaiʻi" class="footer-img footer-img-seagrant" width="240" height="113" loading="lazy" decoding="async" />
+            </a>
             <a class="footer-logo footer-logo-br" href="https://bluerobotics.com/" target="_blank" rel="noopener noreferrer" title="Blue Robotics">
               <img :src="kmUrl('static/assets/blue_robotics_logo.png')" alt="Blue Robotics" class="footer-img footer-img-br" width="260" height="46" loading="lazy" decoding="async" />
             </a>
