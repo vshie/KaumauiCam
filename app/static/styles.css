@@ -474,6 +474,9 @@ button.btn-danger {
   object-fit: contain;
   background: #000;
   border-radius: 2px;
+  /* Shown rotated 180 degrees to match how the C3 is mounted. Display only:
+     recordings and the snapshot JPEG itself stay as captured. */
+  transform: rotate(180deg);
 }
 
 .wq-chart-head {

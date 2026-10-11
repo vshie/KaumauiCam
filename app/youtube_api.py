@@ -62,7 +62,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -161,6 +161,27 @@ _pending_thread: Optional[threading.Thread] = None
 # reads from the scheduler tick). ``date`` is the HST calendar date the
 # broadcast was created for; on rollover we complete + clear it.
 _broadcast: Optional[Dict[str, Any]] = None
+
+# drive_live() is called on every 2 s scheduler tick while ffmpeg runs,
+# and each real check costs 2 API units (liveBroadcasts.list +
+# liveStreams.list). Unthrottled that's ~3600 units per streaming hour
+# against the 10,000/day default quota: measured on the Kaumaui device
+# (2026-10-04) the quota was exhausted mid-day, after which no transition,
+# complete or cleanup call could succeed. Poll every 30 s until the
+# broadcast is live (the kickoff grace is 6 min, so that's ample), then
+# every 5 min just to refresh the UI status.
+DRIVE_LIVE_PENDING_INTERVAL_SECS = 30.0
+DRIVE_LIVE_LIVE_INTERVAL_SECS = 300.0
+_last_drive_ts = 0.0
+
+# The stale-broadcast sweep also runs once per process start (not only
+# when a new day's broadcast is set up), so installing an update mid-day
+# cleans up orphans immediately. Retried at most every
+# SWEEP_RETRY_SECS until it succeeds, so an exhausted quota doesn't turn
+# it into a per-tick API call.
+SWEEP_RETRY_SECS = 600.0
+_swept_ok = False
+_last_sweep_attempt = 0.0
 
 # Provider callable to fetch (client_id, client_secret) from config.
 # Wired by ``init()``. Kept as a callable rather than baked in so config
@@ -738,41 +759,50 @@ def ensure_reusable_stream() -> Dict[str, Any]:
     }
 
 
+def _list_broadcasts(status: str) -> List[Dict[str, Any]]:
+    """All of the channel's broadcasts in ``status`` (``upcoming`` /
+    ``active`` / ``completed``), following pagination.
+
+    ``broadcastStatus`` is one of liveBroadcasts.list's mutually exclusive
+    filters (with ``id`` and ``mine``) and already scopes to the
+    authenticated channel. Sending ``mine=true`` alongside it returns
+    HTTP 400 "Incompatible parameters" -- which silently broke both the
+    existing-broadcast lookup and the stale sweep until 0.4.3.
+    """
+    items: List[Dict[str, Any]] = []
+    page_token: Optional[str] = None
+    for _ in range(10):  # 500 broadcasts is far beyond anything we create
+        params: Dict[str, Any] = {
+            "part": "id,snippet,status,contentDetails",
+            "broadcastStatus": status,
+            "maxResults": 50,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        data = _api_request("GET", "liveBroadcasts", params=params)
+        items.extend(data.get("items") or [])
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return items
+
+
 def _find_existing_broadcast_today(hst_date: str, title: str) -> Optional[Dict[str, Any]]:
     """Look up an existing not-yet-completed broadcast for today. Used
     on startup when we've lost state (fresh container, empty broadcast
     state file) but a previous container already created one earlier
-    today. We match on title -- YouTube's ``mine=true`` listing
-    returns all lifecycle states, so we filter to non-terminal ones."""
-    data = _api_request(
-        "GET",
-        "liveBroadcasts",
-        params={
-            "part": "id,snippet,status,contentDetails",
-            "broadcastStatus": "upcoming",
-            "mine": "true",
-            "maxResults": 25,
-        },
-    )
-    for item in data.get("items") or []:
-        snip = item.get("snippet") or {}
-        if snip.get("title") == title:
-            return item
-    data = _api_request(
-        "GET",
-        "liveBroadcasts",
-        params={
-            "part": "id,snippet,status,contentDetails",
-            "broadcastStatus": "active",
-            "mine": "true",
-            "maxResults": 25,
-        },
-    )
-    for item in data.get("items") or []:
-        snip = item.get("snippet") or {}
-        if snip.get("title") == title:
-            return item
+    today. We match on title among upcoming and active broadcasts."""
+    for status in ("upcoming", "active"):
+        for item in _list_broadcasts(status):
+            if (item.get("snippet") or {}).get("title") == title:
+                return item
     return None
+
+
+# Every broadcast we insert carries this description prefix; the stale
+# sweep only ever touches broadcasts that have it (and are bound to our
+# persistent stream), never ones the operator made by hand in Studio.
+AUTO_DESCRIPTION_PREFIX = "Auto-created by Wailoa Cam"
 
 
 def _insert_broadcast(title: str, privacy: str) -> Dict[str, Any]:
@@ -785,7 +815,7 @@ def _insert_broadcast(title: str, privacy: str) -> Dict[str, Any]:
                 "title": title,
                 "scheduledStartTime": _iso_now_utc(),
                 "description": (
-                    "Auto-created by Wailoa Cam. Managed lifecycle: "
+                    AUTO_DESCRIPTION_PREFIX + ". Managed lifecycle: "
                     "start/stop is driven by the extension's schedule."
                 ),
             },
@@ -859,6 +889,87 @@ def _get_stream(stream_id: str) -> Dict[str, Any]:
     return items[0] if items else {}
 
 
+def _delete_broadcast(broadcast_id: str) -> None:
+    _api_request("DELETE", "liveBroadcasts", params={"id": broadcast_id})
+
+
+def _retire_broadcast(broadcast_id: str, lifecycle: Optional[str] = None) -> str:
+    """Close out a previous day's broadcast so it can never be reused.
+
+    ``transition(complete)`` only works on a broadcast that actually went
+    ``live``. A day where the camera was unreachable creates a broadcast
+    that sits in ``ready`` forever: the old code's complete call failed
+    (logged and ignored), state was cleared, and the orphan stayed bound
+    to the shared persistent stream with ``enableAutoStart=true``. When
+    video came back days later YouTube auto-started one of those orphans,
+    so the published video carried a stale date in its title. A broadcast
+    that never went live has no recording, so we delete it instead.
+
+    Returns what was done ("completed", "deleted", "gone", "skipped").
+    """
+    if lifecycle is None:
+        bcast = _get_broadcast(broadcast_id)
+        if not bcast:
+            return "gone"
+        lifecycle = (bcast.get("status") or {}).get("lifeCycleStatus") or ""
+    lifecycle = lifecycle.lower()
+    if lifecycle == "live":
+        try:
+            _transition(broadcast_id, "complete")
+        except YouTubeApiError as e:
+            if not _redundant_transition(e):
+                raise
+        return "completed"
+    if lifecycle in ("created", "ready", "teststarting", "testing"):
+        _delete_broadcast(broadcast_id)
+        return "deleted"
+    # complete / revoked are already terminal; livestarting will be live
+    # shortly and is retired on a later pass.
+    return "skipped"
+
+
+def _retire_stale_broadcasts(
+    stream_id: str, keep_title: str, keep_id: Optional[str] = None
+) -> bool:
+    """Retire every auto-created, non-terminal broadcast bound to our
+    persistent stream except today's (matched by ``keep_title``). Runs
+    once per day/restart, before today's broadcast is set up, so orphans
+    left by outages can't be auto-started. Best-effort: failures are
+    logged and retried the next time this runs. Returns True when both
+    listings succeeded."""
+    global _swept_ok, _last_sweep_attempt
+    _last_sweep_attempt = time.monotonic()
+    ok = True
+    for status in ("upcoming", "active"):
+        try:
+            listed = _list_broadcasts(status)
+        except YouTubeApiError as e:
+            logger.warning("stale-broadcast sweep: list %s failed: %s", status, e)
+            ok = False
+            continue
+        for item in listed:
+            snip = item.get("snippet") or {}
+            if snip.get("title") == keep_title or (keep_id and item.get("id") == keep_id):
+                continue
+            if not str(snip.get("description") or "").startswith(AUTO_DESCRIPTION_PREFIX):
+                continue
+            if (item.get("contentDetails") or {}).get("boundStreamId") != stream_id:
+                continue
+            bid = item.get("id") or ""
+            lifecycle = (item.get("status") or {}).get("lifeCycleStatus") or ""
+            try:
+                done = _retire_broadcast(bid, lifecycle)
+                logger.info(
+                    "Retired stale broadcast %s (%r, %s): %s",
+                    bid, snip.get("title"), lifecycle, done,
+                )
+            except YouTubeApiError as e:
+                logger.warning("Retiring stale broadcast %s failed: %s", bid, e)
+                ok = False
+    _swept_ok = ok
+    return ok
+
+
 # ---------------------------------------------------------------------------
 # Daily broadcast state machine
 # ---------------------------------------------------------------------------
@@ -896,18 +1007,34 @@ def ensure_todays_broadcast(
     # after midnight cleanly rolls over.
     if current and current.get("date") and current["date"] != hst:
         try:
-            _transition(current["broadcast_id"], "complete")
+            done = _retire_broadcast(current["broadcast_id"])
+            logger.info(
+                "Retired %s broadcast %s: %s", current["date"], current["broadcast_id"], done
+            )
         except YouTubeApiError as e:
-            if not _redundant_transition(e):
-                logger.warning(
-                    "Auto-complete of yesterday's broadcast failed: %s (continuing)", e
-                )
+            # The stale sweep below retries it.
+            logger.warning(
+                "Retiring %s broadcast failed: %s (continuing)", current["date"], e
+            )
         with _bcast_lock:
             _broadcast = None
         current = None
         _save_broadcast_state()
 
     if current and current.get("broadcast_id"):
+        if (
+            not _swept_ok
+            and current.get("stream_id")
+            and (
+                not _last_sweep_attempt
+                or time.monotonic() - _last_sweep_attempt >= SWEEP_RETRY_SECS
+            )
+        ):
+            _retire_stale_broadcasts(
+                current["stream_id"],
+                keep_title=current.get("title") or "",
+                keep_id=current["broadcast_id"],
+            )
         return dict(current)
 
     title = _format_title(title_template, hst)
@@ -923,6 +1050,8 @@ def ensure_todays_broadcast(
     stream = ensure_reusable_stream()
     if not stream.get("stream_key") or not stream.get("stream_id"):
         raise YouTubeApiError("liveStreams did not return a stream_key/stream_id")
+
+    _retire_stale_broadcasts(stream["stream_id"], keep_title=title)
 
     if existing:
         broadcast_id = existing.get("id") or ""
@@ -974,12 +1103,23 @@ def drive_live() -> Optional[str]:
     Idempotent -- if the broadcast is already live (via ``enableAuto
     Start`` or a prior tick), we do nothing beyond noting it. Errors
     are swallowed and recorded on the state dict; the next tick will
-    retry."""
-    global _broadcast
+    retry. Throttled (see ``DRIVE_LIVE_*_INTERVAL_SECS``) to protect the
+    daily API quota; between real checks it returns the last known
+    lifecycle."""
+    global _broadcast, _last_drive_ts
     with _bcast_lock:
         current = _broadcast.copy() if _broadcast else None
     if not current or not current.get("broadcast_id"):
         return None
+    interval = (
+        DRIVE_LIVE_LIVE_INTERVAL_SECS
+        if current.get("is_live")
+        else DRIVE_LIVE_PENDING_INTERVAL_SECS
+    )
+    now = time.monotonic()
+    if _last_drive_ts and now - _last_drive_ts < interval:
+        return current.get("lifecycle")
+    _last_drive_ts = now
     bid = current["broadcast_id"]
     sid = current["stream_id"]
     try:
@@ -1061,14 +1201,11 @@ def complete_today() -> None:
         return
     bid = current["broadcast_id"]
     try:
-        _transition(bid, "complete")
-        logger.info("Completed broadcast %s", bid)
+        done = _retire_broadcast(bid)
+        logger.info("End of day: broadcast %s %s", bid, done)
     except YouTubeApiError as e:
-        if _redundant_transition(e):
-            logger.info("Broadcast %s already complete", bid)
-        else:
-            # Log but still clear state -- next day will insert fresh.
-            logger.warning("complete transition failed for %s: %s", bid, e)
+        # Log but still clear state -- tomorrow's stale sweep retries it.
+        logger.warning("end-of-day retire failed for %s: %s", bid, e)
     with _bcast_lock:
         _broadcast = None
     _save_broadcast_state()
