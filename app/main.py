@@ -407,7 +407,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.5.5"
+_EXTENSION_VERSION = "0.5.6"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 

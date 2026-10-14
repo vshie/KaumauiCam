@@ -66,7 +66,7 @@
 
           <section v-show="tab === 'live'" class="tab-panel tab-panel-live">
             <div class="live-stage">
-              <aside class="wq-column wq-column-left" aria-label="Water quality (left)" :style="{ '--wq-rows': wqLeftParams.length }">
+              <aside class="wq-column wq-column-left" aria-label="Water quality (left)" :class="{ 'wq-column-none': !wqLeftParams.length }" :style="{ '--wq-rows': Math.max(1, wqLeftParams.length) }">
                 <div
                   v-for="p in wqLeftParams"
                   :key="'wq-left-' + p.id"
@@ -103,7 +103,7 @@
               <div class="live-frame">
                 <video ref="liveVideo" playsinline autoplay muted></video>
               </div>
-              <aside class="wq-column wq-column-right wq-column-snap" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1 }">
+              <aside class="wq-column wq-column-right wq-column-snap" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1, '--wq-graphs': wqRightParams.length }">
                 <div
                   v-for="p in wqRightParams"
                   :key="'wq-right-' + p.id"
@@ -674,7 +674,7 @@
                 Water quality (HydroVu)
                 <span class="badge" :class="hydrovuBadgeClass">{{ hydrovuBadgeText }}</span>
               </h2>
-              <p class="status-line">Scrapes the Wailoa Sensor's salinity, turbidity, DO, pH, temperature and ORP from HydroVu on a fixed hourly cadence, fetching only samples newer than what it already has. New samples are merged into <code>/app/data/hydrovu.csv</code>, and the Live tab charts the last 7 days of it.</p>
+              <p class="status-line">Scrapes the Wailoa Sensor's salinity, turbidity, DO, pH, temperature and ORP from HydroVu on a fixed hourly cadence, fetching only samples newer than what it already has. New samples are merged into <code>/app/data/hydrovu.csv</code>, and the Live tab charts the last 7 days of it. Parameters with no non-zero sample within 4 hours of the sensor's latest report are treated as not reporting and hidden from the Live tab.</p>
               <label class="ck-row">
                 <input type="checkbox" v-model="wqHydrovuEnabled" />
                 Enable HydroVu logging
@@ -1218,6 +1218,11 @@
                 ],
                 wqSeries: {},
                 wqFetchedTs: 0,
+                // Param ids still reporting, per the backend's
+                // ACTIVE_WINDOW_SECS rule. null until the first series
+                // load, in which case every chart is shown.
+                wqActive: null,
+                wqNewestSampleMs: null,
                 // Latest C3 color still (Live tab), decoded server-side from
                 // the newest finished stereo segment. ``stereoSnapTs`` is the
                 // image cache-buster; it only changes when the source
@@ -1485,11 +1490,23 @@
                 var e = this.stereoSnap && this.stereoSnap.captured_epoch;
                 return e ? "Captured " + formatHonoluluNow(e * 1000) : "";
               },
+              wqVisibleParams: function () {
+                // Hide sensors that have stopped reporting. If nothing is
+                // active (no data yet) keep every chart so the empty-state
+                // text still explains why.
+                var active = this.wqActive;
+                if (!active || !active.length) return this.wqParams;
+                return this.wqParams.filter(function (p) { return active.indexOf(p.id) !== -1; });
+              },
+              wqHiddenParams: function () {
+                var shown = this.wqVisibleParams;
+                return this.wqParams.filter(function (p) { return shown.indexOf(p) === -1; });
+              },
               wqLeftParams: function () {
-                return this.wqParams.filter(function (p) { return p.side === "left"; });
+                return this.wqVisibleParams.filter(function (p) { return p.side === "left"; });
               },
               wqRightParams: function () {
-                return this.wqParams.filter(function (p) { return p.side === "right"; });
+                return this.wqVisibleParams.filter(function (p) { return p.side === "right"; });
               },
               wqDayLabels: function () {
                 // 7 day-of-week markers spanning the last 7 days, oldest
@@ -1516,8 +1533,14 @@
                   parts.push("HydroVu: " + s.last_error);
                 } else if (s.last_fetched_ts) {
                   parts.push("HydroVu fetched " + this.fmtRelative(s.last_fetched_ts, s.now));
+                  if (this.wqNewestSampleMs) {
+                    parts.push("sensor last reported " + this.fmtRelative(this.wqNewestSampleMs / 1000, s.now));
+                  }
                 } else {
                   parts.push("HydroVu: waiting for first fetch…");
+                }
+                if (this.wqHiddenParams.length) {
+                  parts.push("not reporting: " + this.wqHiddenParams.map(function (p) { return p.label; }).join(", "));
                 }
                 return parts.join(" · ");
               },
@@ -2501,6 +2524,8 @@
                   .then(function (body) {
                     self.wqSeries = (body && body.series) || {};
                     self.wqFetchedTs = (body && body.fetched_ts) || 0;
+                    self.wqActive = (body && body.active) || null;
+                    self.wqNewestSampleMs = (body && body.newest_sample_ms) || null;
                   })
                   .catch(function () {});
               },

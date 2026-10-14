@@ -84,6 +84,21 @@ CSV_HEADER: Tuple[str, ...] = (
 # The Live tab charts only this trailing window; the CSV keeps everything.
 CHART_WINDOW_SECS = 7 * 24 * 3600
 
+# A parameter whose newest sample is more than this far behind the sonde's
+# newest sample (any parameter) is treated as not reporting and hidden on
+# the Live tab. Measured relative to the sonde rather than wall-clock: the
+# sonde uploads roughly hourly but can go quiet for many hours at a time,
+# and a wall-clock cutoff would then blank every chart at once. Field
+# case (Oct 2026): temperature dropped out on 09-29 and DO/pH (which HydroVu
+# derives using temperature) on 10-03, leaving three permanently empty
+# charts while ORP and turbidity kept reporting.
+#
+# A reading of exactly 0 doesn't count as reporting: when the conductivity
+# cell failed, HydroVu kept sending salinity (derived from conductivity) as
+# a flat 0.0 with resistivity pegged at 1e7 ohm-cm. Real Wailoa water never
+# reads an exact 0 for hours (fresh-water salinity is still ~0.01+ psu).
+ACTIVE_WINDOW_SECS = 4 * 3600
+
 # How far back the first poll after a start (or a CSV delete) reaches, to
 # fill gaps left while the extension was down. Later polls are incremental.
 BACKFILL_SECS = 30 * 24 * 3600
@@ -627,13 +642,32 @@ def series() -> Dict[str, Any]:
     hard-code labels/units."""
     with _state_lock:
         fetched = _last_fetched_ts
+    collected = _collected_series()
     cutoff_ms = (time.time() - CHART_WINDOW_SECS) * 1000
     windowed = {
         pid: {"unit": s["unit"], "points": [p for p in s["points"] if p[0] >= cutoff_ms]}
-        for pid, s in _collected_series().items()
+        for pid, s in collected.items()
     }
+    last_ms = {pid: s["points"][-1][0] for pid, s in collected.items() if s["points"]}
+    newest_ms = max(last_ms.values()) if last_ms else None
+    active = []
+    if newest_ms is not None:
+        since_ms = newest_ms - ACTIVE_WINDOW_SECS * 1000
+        for pid, _label, _unit, _col in PARAMS:
+            pts = collected.get(pid, {}).get("points") or []
+            # Newest-first scan; stops at the window edge.
+            for t, v in reversed(pts):
+                if t < since_ms:
+                    break
+                if v != 0:
+                    active.append(pid)
+                    break
     body: Dict[str, Any] = {
         "series": windowed,
+        # Params still reporting (see ACTIVE_WINDOW_SECS), in PARAMS order.
+        "active": active,
+        "last_sample_ms": last_ms,
+        "newest_sample_ms": newest_ms,
         "fetched_ts": fetched,
         "location_id": _cached_location_id,
     }

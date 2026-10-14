@@ -417,9 +417,10 @@ button.btn-danger {
   overflow: hidden;
 }
 
-/* Right column: two graphs plus a taller C3 tile (snapshot + motion list). */
+/* Right column: its reporting graphs (--wq-graphs, 0-2 as sensors drop
+   out) plus a taller C3 tile (snapshot + motion list). */
 .wq-column.wq-column-snap {
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr);
+  grid-template-rows: repeat(var(--wq-graphs, 2), minmax(0, 1fr)) minmax(0, 1.6fr);
 }
 
 /* C3 stereo snapshot tile: same frame as a graph, image letterboxed. */
@@ -590,6 +591,11 @@ button.btn-danger {
   }
   .wq-column.wq-column-snap {
     grid-template-rows: minmax(160px, 1fr);
+  }
+  /* Every graph in the column is hidden as not reporting: drop the empty
+     band when stacked. (Kept on wide screens to hold the 3-column grid.) */
+  .wq-column.wq-column-none {
+    display: none;
   }
 }
 
