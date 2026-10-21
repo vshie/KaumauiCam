@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -115,6 +115,50 @@ class AxisCamera:
         params.update(updates)
         r = self._get("/axis-cgi/param.cgi", params=params)
         r.raise_for_status()
+
+    # --- Dynamic Overlay API (AXIS OS JSON API, v1.7 on the M5526-E) -----
+    # Text drawn by the camera's encoder, so it lands in every stream from
+    # the channel (YouTube's stream-copied H.264 included) at no CPU cost
+    # to the Pi. Overlays are addressed by an integer ``identity``.
+
+    _OVERLAY_CGI = "/axis-cgi/dynamicoverlay/dynamicoverlay.cgi"
+    _OVERLAY_API_VERSION = "1.7"
+
+    def _overlay_call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        r = self._post(
+            self._OVERLAY_CGI,
+            json={"apiVersion": self._OVERLAY_API_VERSION, "method": method, "params": params},
+        )
+        r.raise_for_status()
+        body = r.json() or {}
+        err = body.get("error")
+        if err:
+            raise RuntimeError(f"dynamicoverlay {method}: {err.get('code')} {err.get('message')}")
+        return body.get("data") or {}
+
+    def overlay_list_text(self) -> List[Dict[str, Any]]:
+        return list(self._overlay_call("list", {}).get("textOverlays") or [])
+
+    def overlay_add_text(self, text: str, position: str = "bottomLeft", font_size: int = 32) -> int:
+        data = self._overlay_call(
+            "addText",
+            {
+                "camera": 1,
+                "text": text,
+                "position": position,
+                "fontSize": int(font_size),
+                "textColor": "white",
+                "textBGColor": "semiTransparent",
+                "textOLColor": "black",
+            },
+        )
+        return int(data["identity"])
+
+    def overlay_set_text(self, identity: int, text: str) -> None:
+        self._overlay_call("setText", {"identity": int(identity), "text": text})
+
+    def overlay_remove(self, identity: int) -> None:
+        self._overlay_call("remove", {"identity": int(identity)})
 
     def stream_profile_add(self) -> Optional[str]:
         """

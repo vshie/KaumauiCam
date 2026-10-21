@@ -141,6 +141,13 @@ device_type, serial, firmware
 
 Numeric columns are stripped of their unit suffix (e.g. `26.83`, not `26.830 V`) so Excel / pandas parse them as numbers; the unit lives in the column name. Missing entities are written as empty cells rather than aborting the whole row, so a brief network blip on one sensor doesn't blank out the others. The file lives on the bind-mounted `/app/data` (i.e. `/usr/blueos/extensions/kaumauicam/solar.csv` on the host) so it survives container rebuilds.
 
+### Water quality (HydroVu, Kaumaui Sensor)
+
+The extension scrapes the **Kaumaui Sensor** location from Hawai'i Sea Grant's HydroVu account, using the same public-access link as Wailoa Cam. Paste the link (or just the token) into **Settings → Water quality (HydroVu)**. It is stored in `config.json` and never returned by the API. Every hour the extension fetches only the samples newer than what it already has, and merges them into **`/app/data/hydrovu.csv`** (`timestamp_iso, timestamp_epoch, salinity_psu, turbidity_ntu, do_mg_l, ph, temperature_c, orp_mv`). The first poll after a start or a CSV delete backfills 30 days.
+
+- **Live tab:** 7-day line charts for each parameter. A parameter with no non-zero sample within 4 h of the sensor's newest report counts as "not reporting" and is hidden.
+- **Video overlay:** the camera draws the newest **salinity, pH, DO and temperature**, plus the time HydroVu says they were measured, along the bottom-left of the picture (Axis Dynamic Overlay API, `app/wq_overlay.py`). Because the camera does the drawing, the overlay costs the Pi nothing and appears on YouTube, the local preview and recordings alike. HydroVu uploads arrive in batches several hours late, which is why the measurement time is shown. Toggle it under Settings; turning it off removes the overlay from the camera.
+
 ## Push this repo (you deploy)
 
 Repository: **https://github.com/vshie/KaumauiCam**
@@ -190,6 +197,12 @@ git push -u origin main
 | GET | `/api/solar/download` | Download `solar.csv` (cumulative, header + timestamp_iso first column) |
 | POST | `/api/solar/delete` | Wipe `solar.csv` (logging continues, next row appears at the next poll) |
 | POST | `/api/solar/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
+| GET | `/api/hydrovu/series` | Last 7 days of water quality per parameter, plus which parameters are still reporting |
+| GET | `/api/hydrovu/status` | Poller status (never the token), CSV size/rows, 5-row preview, video overlay status |
+| POST | `/api/hydrovu/refresh` | Poll HydroVu now and return the result |
+| POST | `/api/hydrovu/poke` | Wake the poller thread |
+| GET | `/api/hydrovu/download` | Download `hydrovu.csv` |
+| POST | `/api/hydrovu/delete` | Wipe `hydrovu.csv` (next poll backfills 30 days) |
 | POST | `/api/camera/ensure-livepreview` | Create profile on camera |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |

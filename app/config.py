@@ -98,6 +98,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "solar_enabled": True,
     "solar_host": "192.168.20.66",
     "solar_interval_secs": 60.0,
+    # HydroVu water-quality scraper (see app/hydrovu.py). Pulls the
+    # Kaumaui Sensor's salinity/turbidity/DO/pH/temperature/ORP once per
+    # hour into /app/data/hydrovu.csv and drives the Live tab's charts.
+    #
+    # ``hydrovu_token`` is the public-access token the operator pastes on
+    # the Settings tab -- either the full ``.../#/?token=...`` URL or
+    # just the string after ``token=``. It is never returned by GET
+    # /api/config; only a ``hydrovu_token_set`` boolean is exposed so
+    # the token can't be exfiltrated by anyone who can reach the UI.
+    "hydrovu_enabled": True,
+    "hydrovu_token": "",
+    "hydrovu_interval_secs": 3600.0,
+    # Burn the newest salinity/pH/DO/temperature into the camera video
+    # (and so the YouTube stream) via an Axis text overlay; see
+    # app/wq_overlay.py. Off removes the overlay from the camera.
+    "wq_overlay_enabled": True,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

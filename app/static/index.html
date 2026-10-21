@@ -103,6 +103,47 @@
                 <p class="status-line hint" v-if="wiperStatus">{{ wiperStatus }}</p>
               </div>
             </div>
+          <div class="panel wq-panel">
+            <h2>
+              Water quality <span class="badge badge-muted">Kaumaui Sensor · HydroVu · last 7 days</span>
+            </h2>
+            <div class="wq-charts">
+              <div
+                v-for="p in wqVisibleParams"
+                :key="'wq-' + p.id"
+                class="wq-chart"
+                :class="{ 'wq-chart-empty': !wqChart(p.id).points.length }"
+              >
+                <div class="wq-chart-head">
+                  <span class="wq-chart-label">{{ p.label }}</span>
+                  <span class="wq-chart-unit">{{ p.unitLabel }}</span>
+                  <span class="wq-chart-value">{{ wqChart(p.id).lastValueText }}</span>
+                </div>
+                <div class="wq-chart-body">
+                  <svg
+                    class="wq-chart-svg"
+                    viewBox="0 0 200 80"
+                    preserveAspectRatio="none"
+                    role="img"
+                    :aria-label="p.label + ' over last 7 days'"
+                  >
+                    <line v-for="y in [20, 40, 60]" :key="'g' + p.id + y" :x1="0" :x2="200" :y1="y" :y2="y" class="wq-grid" />
+                    <polyline
+                      v-if="wqChart(p.id).points.length"
+                      :points="wqChart(p.id).svgPoints"
+                      class="wq-line"
+                    />
+                  </svg>
+                  <div class="wq-chart-axis" aria-hidden="true">
+                    <span v-for="(d, di) in wqDayLabels" :key="'ax' + p.id + di">{{ d }}</span>
+                  </div>
+                </div>
+                <p class="wq-chart-status" v-if="!wqChart(p.id).points.length">{{ wqEmptyLine }}</p>
+              </div>
+            </div>
+            <p class="status-line" v-if="wqStatusLine">{{ wqStatusLine }}</p>
+            <p class="status-line hint" v-if="wqOverlayLine">{{ wqOverlayLine }}</p>
+          </div>
           </section>
 
           <section v-show="tab === 'stream'" class="tab-panel">
@@ -382,6 +423,53 @@
               </div>
               <h2 class="h2-spaced">CSV preview <span class="badge badge-muted">last 5 rows</span></h2>
               <pre class="solar-preview" v-if="solarStatus.preview">{{ solarStatus.preview }}</pre>
+              <p class="status-line hint" v-else>CSV is empty.</p>
+            </div>
+            <div class="panel">
+              <h2>
+                Water quality (HydroVu)
+                <span class="badge" :class="hydrovuBadgeClass">{{ hydrovuBadgeText }}</span>
+              </h2>
+              <p class="status-line">Scrapes the Kaumaui Sensor's salinity, turbidity, DO, pH, temperature and ORP from HydroVu on a fixed hourly cadence, fetching only samples newer than what it already has. New samples are merged into <code>/app/data/hydrovu.csv</code>, and the Live tab charts the last 7 days of it. Parameters with no non-zero sample within 4 hours of the sensor's latest report are treated as not reporting and hidden from the Live tab and the video overlay.</p>
+              <label class="ck-row">
+                <input type="checkbox" v-model="wqHydrovuEnabled" />
+                Enable HydroVu logging
+              </label>
+              <label class="ck-row">
+                <input type="checkbox" v-model="wqOverlayEnabled" />
+                Show latest salinity, pH, DO and temperature on the video
+              </label>
+              <p class="status-line hint">Drawn by the camera along the bottom edge, so it appears on the YouTube stream, the local preview and recordings, with the time HydroVu says the values were measured. Charts stay on this page only.</p>
+              <label>Public-access token</label>
+              <input
+                type="password"
+                v-model="wqHydrovuTokenInput"
+                autocomplete="off"
+                :placeholder="hydrovuTokenSet ? 'Token saved — leave blank to keep' : 'Paste HydroVu token or full ?token=... URL'"
+              />
+              <p class="status-line hint">Paste either the raw token or the full <code>https://www.hydrovu.com/#/?token=…</code> URL from the public-access instructions. The token is stored in <code>/app/data/config.json</code> and never returned by the API — only a "token saved" flag is exposed to this page.</p>
+              <label>Refresh interval (seconds)</label>
+              <input type="number" v-model.number="wqHydrovuIntervalSecs" min="60" max="86400" step="60" />
+              <p class="status-line hint">HydroVu updates roughly hourly, so 3600 is the natural default. Shorter intervals mostly re-fetch the same samples.</p>
+              <div class="row row-actions-spaced">
+                <button type="button" class="btn" @click="saveHydrovu">Save</button>
+                <button type="button" class="btn btn-secondary" @click="refreshHydrovuNow" :disabled="!hydrovuTokenSet && !wqHydrovuTokenInput">Refresh now</button>
+                <a class="btn btn-secondary" :href="kmUrl('/api/hydrovu/download')" :class="{ 'is-disabled': !wqStatus.csv_size_bytes }">Download CSV</a>
+                <button type="button" class="btn btn-danger" :disabled="!wqStatus.csv_size_bytes" @click="deleteHydrovuCsv">Delete CSV</button>
+              </div>
+              <p class="status-line">{{ hydrovuStatusLine }}</p>
+              <p class="status-line err" v-if="wqStatus.last_error">{{ wqStatus.last_error }}</p>
+              <p class="status-line" v-if="wqOverlayLine">{{ wqOverlayLine }}</p>
+              <h2 class="h2-spaced">Latest sample counts <span class="badge badge-muted">collected, all time</span></h2>
+              <div class="solar-grid" v-if="hydrovuHasPoints">
+                <div class="solar-cell" v-for="p in wqParams" :key="'wqcnt-' + p.id">
+                  <span class="solar-label">{{ p.label }}</span>
+                  <span class="solar-value">{{ (wqStatus.series_points && wqStatus.series_points[p.id]) || 0 }} pts</span>
+                </div>
+              </div>
+              <p class="status-line hint" v-else>No samples yet — the graphs on the Live tab will populate after the first successful scrape.</p>
+              <h2 class="h2-spaced">CSV preview <span class="badge badge-muted">last 5 rows</span></h2>
+              <pre class="solar-preview" v-if="wqStatus.preview">{{ wqStatus.preview }}</pre>
               <p class="status-line hint" v-else>CSV is empty.</p>
             </div>
           </section>
@@ -809,6 +897,41 @@
                   columns: [],
                 },
                 solarLive: null,
+                // HydroVu water-quality charts (Live tab). ``wqSeries`` is
+                // keyed by parameter id and holds ``{unit, points}`` where
+                // points is a sorted list of ``[epoch_ms, value]``. Params
+                // metadata mirrors the backend PARAMS tuple in hydrovu.py.
+                wqParams: [
+                  { id: "salinity",    label: "Salinity",    unitLabel: "psu",  column: "salinity_psu" },
+                  { id: "ph",          label: "pH",          unitLabel: "",     column: "ph" },
+                  { id: "do",          label: "DO",          unitLabel: "mg/L", column: "do_mg_l" },
+                  { id: "temperature", label: "Temperature", unitLabel: "°C",   column: "temperature_c" },
+                  { id: "turbidity",   label: "Turbidity",   unitLabel: "NTU",  column: "turbidity_ntu" },
+                  { id: "orp",         label: "ORP",         unitLabel: "mV",   column: "orp_mv" },
+                ],
+                wqSeries: {},
+                wqFetchedTs: 0,
+                // Param ids still reporting, per the backend's
+                // ACTIVE_WINDOW_SECS rule. null until the first series
+                // load, in which case every chart is shown.
+                wqActive: null,
+                wqNewestSampleMs: null,
+                wqStatus: {
+                  enabled: true,
+                  token_set: false,
+                  last_fetched_ts: null,
+                  last_error: null,
+                  interval_secs: 3600,
+                  rows_logged: 0,
+                  csv_size_bytes: 0,
+                  preview: "",
+                  series_points: {},
+                },
+                wqHydrovuTokenInput: "",
+                wqHydrovuEnabled: true,
+                wqHydrovuIntervalSecs: 3600,
+                hydrovuTokenSet: false,
+                wqOverlayEnabled: true,
                 pc: null,
                 ptzBackoffMs: 800,
                 ptzTimer: null,
@@ -817,6 +940,106 @@
               };
             },
             computed: {
+              wqVisibleParams: function () {
+                // Hide sensors that have stopped reporting. If nothing is
+                // active (no data yet) keep every chart so the empty-state
+                // text still explains why.
+                var active = this.wqActive;
+                if (!active || !active.length) return this.wqParams;
+                return this.wqParams.filter(function (p) { return active.indexOf(p.id) !== -1; });
+              },
+              wqHiddenParams: function () {
+                var shown = this.wqVisibleParams;
+                return this.wqParams.filter(function (p) { return shown.indexOf(p) === -1; });
+              },
+              wqDayLabels: function () {
+                // 7 day-of-week markers spanning the last 7 days, oldest
+                // on the left. HST is a constant UTC-10 offset so we
+                // don't need tzdata to line these up with the samples.
+                var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                var out = [];
+                var now = Date.now();
+                for (var i = 6; i >= 0; i--) {
+                  var d = new Date(now - i * 86400000 - 10 * 3600 * 1000);
+                  out.push(days[d.getUTCDay()]);
+                }
+                return out;
+              },
+              wqStatusLine: function () {
+                var s = this.wqStatus;
+                if (!s) return "";
+                var parts = [];
+                if (!s.token_set) {
+                  parts.push("HydroVu token not set — enter one in Settings");
+                } else if (!s.enabled) {
+                  parts.push("HydroVu logging paused");
+                } else if (s.last_error) {
+                  parts.push("HydroVu: " + s.last_error);
+                } else if (s.last_fetched_ts) {
+                  parts.push("HydroVu fetched " + this.fmtRelative(s.last_fetched_ts, s.now));
+                  if (this.wqNewestSampleMs) {
+                    parts.push("sensor last reported " + this.fmtRelative(this.wqNewestSampleMs / 1000, s.now));
+                  }
+                } else {
+                  parts.push("HydroVu: waiting for first fetch…");
+                }
+                if (this.wqHiddenParams.length) {
+                  parts.push("not reporting: " + this.wqHiddenParams.map(function (p) { return p.label; }).join(", "));
+                }
+                return parts.join(" · ");
+              },
+              wqEmptyLine: function () {
+                var s = this.wqStatus || {};
+                if (!s.token_set) return "Token not set";
+                if (s.last_error) return "Fetch error";
+                if (!s.last_fetched_ts) return "Waiting for first fetch…";
+                return "No samples in the last 7 days";
+              },
+              hydrovuBadgeText: function () {
+                var s = this.wqStatus || {};
+                if (!s.token_set) return "Token needed";
+                if (!s.enabled) return "Disabled";
+                if (s.last_error) return "Warning";
+                if (s.last_fetched_ts) return "Logging";
+                return "Starting";
+              },
+              hydrovuBadgeClass: function () {
+                var s = this.wqStatus || {};
+                if (!s.token_set) return "badge-warn";
+                if (!s.enabled) return "badge-muted";
+                if (s.last_error) return "badge-warn";
+                if (s.last_fetched_ts) return "badge-good";
+                return "";
+              },
+              hydrovuStatusLine: function () {
+                var s = this.wqStatus || {};
+                var parts = [];
+                parts.push(s.token_set ? "Token saved" : "No token");
+                parts.push(s.enabled ? "Enabled" : "Disabled");
+                parts.push("interval " + Math.round(s.interval_secs || 0) + "s");
+                parts.push((s.rows_logged || 0) + " row" + (s.rows_logged === 1 ? "" : "s"));
+                parts.push(this.fmtBytes(s.csv_size_bytes || 0));
+                if (s.last_fetched_ts) {
+                  parts.push("last fetch " + this.fmtRelative(s.last_fetched_ts, s.now));
+                }
+                if (s.location_id) parts.push("loc " + s.location_id);
+                return parts.join(" · ") + ".";
+              },
+              hydrovuHasPoints: function () {
+                var pts = (this.wqStatus && this.wqStatus.series_points) || {};
+                for (var k in pts) {
+                  if (Object.prototype.hasOwnProperty.call(pts, k) && pts[k] > 0) return true;
+                }
+                return false;
+              },
+              wqOverlayLine: function () {
+                var o = (this.wqStatus || {}).overlay;
+                if (!o) return "";
+                if (o.error) return "Video overlay: camera error — " + o.error;
+                if (!this.wqOverlayEnabled) return "Video overlay: off";
+                if (o.text) return "On video: " + o.text;
+                return o.applied_ts ? "Video overlay: nothing reporting, hidden" : "";
+              },
               recPreviewLine: function () {
                 // Same math as scheduler.recording_preview() in
                 // app/scheduler.py; kept client-side too so the
@@ -1067,6 +1290,12 @@
                     self.solarEnabled = c.solar_enabled !== false;
                     self.solarHost = c.solar_host || "192.168.20.66";
                     self.solarInterval = c.solar_interval_secs != null ? c.solar_interval_secs : 60;
+                    self.wqHydrovuEnabled = c.hydrovu_enabled !== false;
+                    self.wqHydrovuIntervalSecs = c.hydrovu_interval_secs != null
+                      ? c.hydrovu_interval_secs
+                      : 3600;
+                    self.hydrovuTokenSet = !!c.hydrovu_token_set;
+                    self.wqOverlayEnabled = c.wq_overlay_enabled !== false;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
                   })
@@ -1694,6 +1923,140 @@
                   alert((r && r.message) || "Provisioned youtubelive profile on camera.");
                 });
               },
+              wqChart: function (paramId) {
+                // Turn the raw ``[[ms, value], ...]`` list for one parameter
+                // into the props the SVG needs: an "M x y L x y ..." string
+                // and a formatted "last value" for the header, computed off
+                // fixed axes so the chart plots consistently over the full
+                // 7-day window. The backend already trims to that window;
+                // the CSV keeps the full history. Returns an empty object shape when we don't
+                // have data yet so v-if / v-for stay safe.
+                var entry = (this.wqSeries || {})[paramId] || {};
+                var points = entry.points || [];
+                var count = points.length;
+                var out = {
+                  points: points,
+                  svgPoints: "",
+                  lastValue: null,
+                  lastValueText: "—",
+                };
+                if (!count) return out;
+                var last = points[count - 1];
+                var lastVal = last[1];
+                out.lastValue = lastVal;
+                out.lastValueText = this.fmtWqValue(lastVal);
+                // Fixed 7-day x-axis so the head of the polyline matches
+                // "now" on every chart, and gaps in the source data show
+                // as gaps against the day-of-week labels rather than
+                // rescaling to fill the frame.
+                var nowMs = Date.now();
+                var startMs = nowMs - 7 * 86400 * 1000;
+                var span = nowMs - startMs;
+                var vals = points.map(function (pt) { return pt[1]; });
+                var lo = Math.min.apply(null, vals);
+                var hi = Math.max.apply(null, vals);
+                if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+                if (hi - lo < 1e-9) {
+                  var eps = Math.max(0.5, Math.abs(hi) * 0.05);
+                  lo -= eps; hi += eps;
+                }
+                var svg = "";
+                for (var i = 0; i < count; i++) {
+                  var t = points[i][0];
+                  var v = points[i][1];
+                  var x = ((t - startMs) / span) * 200;
+                  if (x < 0) x = 0;
+                  if (x > 200) x = 200;
+                  // Reserve a top/bottom margin of 5 so the polyline
+                  // doesn't sit exactly on the chart edge.
+                  var y = 75 - ((v - lo) / (hi - lo)) * 70;
+                  svg += (i === 0 ? "" : " ") + x.toFixed(2) + "," + y.toFixed(2);
+                }
+                out.svgPoints = svg;
+                return out;
+              },
+              fmtWqValue: function (v) {
+                if (v === null || v === undefined) return "—";
+                var n = Number(v);
+                if (!isFinite(n)) return "—";
+                var abs = Math.abs(n);
+                var digits = abs >= 100 ? 0 : abs >= 10 ? 1 : abs >= 1 ? 2 : 3;
+                return n.toFixed(digits);
+              },
+              pollHydrovuSeries: function () {
+                var self = this;
+                return this.api("GET", "/api/hydrovu/series")
+                  .then(function (body) {
+                    self.wqSeries = (body && body.series) || {};
+                    self.wqFetchedTs = (body && body.fetched_ts) || 0;
+                    self.wqActive = (body && body.active) || null;
+                    self.wqNewestSampleMs = (body && body.newest_sample_ms) || null;
+                  })
+                  .catch(function () {});
+              },
+              pollHydrovuStatus: function () {
+                var self = this;
+                return this.api("GET", "/api/hydrovu/status")
+                  .then(function (s) {
+                    if (s) self.wqStatus = s;
+                  })
+                  .catch(function () {});
+              },
+              saveHydrovu: function () {
+                var self = this;
+                var patch = {
+                  hydrovu_enabled: !!this.wqHydrovuEnabled,
+                  wq_overlay_enabled: !!this.wqOverlayEnabled,
+                  hydrovu_interval_secs: Math.max(60, Math.min(24 * 3600,
+                    parseFloat(this.wqHydrovuIntervalSecs) || 3600)),
+                };
+                var token = String(this.wqHydrovuTokenInput || "").trim();
+                // Only send the token when the operator actually typed
+                // something; the backend ignores empty tokens on POST
+                // to preserve the saved one across unrelated Settings
+                // saves.
+                if (token) patch.hydrovu_token = token;
+                this.api("POST", "/api/config", patch).then(function () {
+                  self.wqHydrovuTokenInput = "";
+                  alert("Saved.");
+                  self.loadConfig({ force: true });
+                  self.pollHydrovuStatus();
+                  // Ask the poller to refresh right away so charts show
+                  // fresh data without waiting an hour.
+                  self.api("POST", "/api/hydrovu/poke", {}).catch(function () {});
+                  setTimeout(function () { self.pollHydrovuSeries(); }, 3000);
+                });
+              },
+              refreshHydrovuNow: function () {
+                var self = this;
+                this.api("POST", "/api/hydrovu/refresh", {})
+                  .then(function (res) {
+                    if (res && res.ok) {
+                      self.pollHydrovuSeries();
+                      self.pollHydrovuStatus();
+                    } else {
+                      alert("Refresh failed: " + ((res && res.message) || "unknown error"));
+                      self.pollHydrovuStatus();
+                    }
+                  })
+                  .catch(function (e) {
+                    alert("Refresh failed: " + (e && e.message ? e.message : e));
+                  });
+              },
+              deleteHydrovuCsv: function () {
+                var self = this;
+                if (!confirm("Delete hydrovu.csv? Logging continues; the next scrape rebuilds the file with the last 30 days of data.")) return;
+                var typed = prompt('Type "DELETE" to confirm.');
+                if (typed !== "DELETE") {
+                  alert("Cancelled — nothing was deleted.");
+                  return;
+                }
+                this.api("POST", "/api/hydrovu/delete", {}).then(function (res) {
+                  self.pollHydrovuStatus();
+                  if (res && res.deleted) alert("Deleted " + res.path);
+                  else alert("No file to delete.");
+                });
+              },
               pollSolar: function () {
                 var self = this;
                 this.api("GET", "/api/solar/status")
@@ -1786,6 +2149,8 @@
                 self.pollStorage();
                 self.pollLink();
                 self.pollSolar();
+                self.pollHydrovuSeries();
+                self.pollHydrovuStatus();
                 self.pollYoutubeApi();
               });
               setInterval(function () {
@@ -1803,6 +2168,15 @@
               setInterval(function () {
                 self.pollSolar();
               }, 15000);
+              // HydroVu: the backend scrapes hourly, so the charts only
+              // need an occasional re-fetch; status is cheap and keeps the
+              // "fetched Xm ago" / overlay lines fresh.
+              setInterval(function () {
+                self.pollHydrovuSeries();
+              }, 600 * 1000);
+              setInterval(function () {
+                self.pollHydrovuStatus();
+              }, 30000);
               setInterval(function () {
                 // Refresh OAuth + broadcast status independently of the
                 // device-flow poller so the UI stays fresh (connected

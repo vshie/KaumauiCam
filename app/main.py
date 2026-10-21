@@ -16,8 +16,10 @@ from flask import Flask, Response, jsonify, request, send_from_directory, send_f
 
 import bandwidth
 import config as cfgmod
+import hydrovu
 import link_uptime
 import solar
+import wq_overlay
 import youtube_api
 import youtube_monitor
 from camera import AxisCamera
@@ -286,7 +288,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.4.3"
+_EXTENSION_VERSION = "0.5.0"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
@@ -726,8 +728,21 @@ def health():
 @app.route("/api/config", methods=["GET", "POST"])
 def api_config():
     if request.method == "GET":
-        return jsonify(cfgmod.load())
+        out = cfgmod.load()
+        # Never leak the HydroVu token to the browser: anyone with UI
+        # access could exfiltrate it (it's shared across the whole
+        # Sea Grant HydroVu account). Expose only a boolean the
+        # Settings tab can show as a "Token saved" placeholder.
+        out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
+        out.pop("hydrovu_token", None)
+        return jsonify(out)
     data = request.get_json(force=True, silent=True) or {}
+    # Empty token strings from the Settings page mean "leave the saved
+    # token alone" -- otherwise every unrelated Settings save would
+    # silently wipe the token because the field renders as blank
+    # whenever it's already set.
+    if "hydrovu_token" in data and not str(data.get("hydrovu_token") or "").strip():
+        data.pop("hydrovu_token", None)
     out = cfgmod.update(data)
     if any(k in data for k in ("camera_host", "camera_user", "camera_pass")):
         try:
@@ -745,6 +760,17 @@ def api_config():
             youtube_monitor.poke()
         except Exception:
             logger.exception("youtube_monitor.poke after config save failed")
+    # Wake the HydroVu poller if any of its knobs changed so the operator
+    # sees a fresh fetch (and updated graphs) within seconds of saving.
+    if any(k in data for k in ("hydrovu_token", "hydrovu_enabled", "hydrovu_interval_secs")):
+        try:
+            hydrovu.poke()
+        except Exception:
+            logger.exception("hydrovu.poke after config save failed")
+    if any(k in data for k in ("wq_overlay_enabled", "hydrovu_enabled")):
+        wq_overlay.poke()
+    out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
+    out.pop("hydrovu_token", None)
     return jsonify(out)
 
 
@@ -1100,6 +1126,72 @@ def storage():
     u = usb_status()
     u["sd_free_gb"] = sd_card_free_gb("/app/data")
     return jsonify(u)
+
+
+@app.route("/api/hydrovu/series", methods=["GET"])
+def hydrovu_series():
+    """Last seven days of water quality for the Live tab charts.
+
+    One entry per parameter (``[epoch_ms, value]`` pairs) plus parameter
+    metadata and which params are still reporting. Served from a parse
+    of hydrovu.csv memoized on its mtime, so frequent hits are cheap."""
+    return jsonify(hydrovu.series())
+
+
+@app.route("/api/hydrovu/status", methods=["GET"])
+def hydrovu_status():
+    """Poller state for the Settings tab: last fetch time, last error,
+    CSV size/rows, per-parameter point counts, token-set flag. Never
+    returns the token itself."""
+    try:
+        st = hydrovu.status()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        st["preview"] = hydrovu.csv_preview(max_rows=5)
+    except Exception:
+        st["preview"] = ""
+    st["overlay"] = wq_overlay.status()
+    return jsonify(st)
+
+
+@app.route("/api/hydrovu/poke", methods=["POST"])
+def hydrovu_poke():
+    """Force an immediate scrape (used by Settings after Save / Refresh)."""
+    hydrovu.poke()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/hydrovu/refresh", methods=["POST"])
+def hydrovu_refresh():
+    """One-shot synchronous poll. Same effect as ``poke`` but returns the
+    result inline so the UI can show success/failure without polling
+    ``/status``."""
+    return jsonify(hydrovu.refresh_now())
+
+
+@app.route("/api/hydrovu/download", methods=["GET"])
+def hydrovu_download():
+    """Send the cumulative water-quality CSV."""
+    path = hydrovu.csv_path()
+    if not os.path.isfile(path):
+        return jsonify({"error": "no csv yet"}), 404
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name="hydrovu.csv",
+        mimetype="text/csv",
+    )
+
+
+@app.route("/api/hydrovu/delete", methods=["POST"])
+def hydrovu_delete():
+    """Wipe hydrovu.csv. Logging continues; the next poll backfills the
+    last 30 days from HydroVu and repopulates the file."""
+    res = hydrovu.delete_csv()
+    if not res.get("ok"):
+        return jsonify(res), 500
+    return jsonify(res)
 
 
 @app.route("/api/solar/status", methods=["GET"])
@@ -1507,6 +1599,16 @@ def main() -> None:
         solar.start(get_cfg=cfgmod.load)
     except Exception:
         logger.exception("solar.start failed")
+    # HydroVu water-quality scraper (Kaumaui Sensor -> hydrovu.csv) and
+    # the camera text overlay fed from it. Both reload config per cycle.
+    try:
+        hydrovu.start(get_cfg=cfgmod.load)
+    except Exception:
+        logger.exception("hydrovu.start failed")
+    try:
+        wq_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
+    except Exception:
+        logger.exception("wq_overlay.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()
