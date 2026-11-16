@@ -19,6 +19,8 @@ import config as cfgmod
 import hydrovu
 import link_uptime
 import solar
+import tide
+import tide_overlay
 import wq_overlay
 import youtube_api
 import youtube_monitor
@@ -288,7 +290,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.5.0"
+_EXTENSION_VERSION = "0.6.0"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
@@ -769,6 +771,10 @@ def api_config():
             logger.exception("hydrovu.poke after config save failed")
     if any(k in data for k in ("wq_overlay_enabled", "hydrovu_enabled")):
         wq_overlay.poke()
+    if any(k in data for k in ("tide_enabled", "tide_interval_secs")):
+        tide.poke()
+    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled")):
+        tide_overlay.poke()
     out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
     out.pop("hydrovu_token", None)
     return jsonify(out)
@@ -1194,6 +1200,59 @@ def hydrovu_delete():
     return jsonify(res)
 
 
+@app.route("/api/tide/series", methods=["GET"])
+def tide_series():
+    """Tide chart data for the Live tab: observed level for the last 48 h
+    (from tide.csv), NOAA's predicted curve from -48 h to +24 h, and the
+    predicted highs/lows in that window."""
+    return jsonify(tide.series())
+
+
+@app.route("/api/tide/status", methods=["GET"])
+def tide_status():
+    """Poller state for the Settings tab plus a CSV preview and the
+    video overlay status."""
+    try:
+        st = tide.status()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        st["preview"] = tide.csv_preview(max_rows=5)
+    except Exception:
+        st["preview"] = ""
+    st["overlay"] = tide_overlay.status()
+    return jsonify(st)
+
+
+@app.route("/api/tide/poke", methods=["POST"])
+def tide_poke():
+    tide.poke()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tide/refresh", methods=["POST"])
+def tide_refresh():
+    """One-shot synchronous NOAA fetch; returns the result inline."""
+    return jsonify(tide.refresh_now())
+
+
+@app.route("/api/tide/download", methods=["GET"])
+def tide_download():
+    path = tide.csv_path()
+    if not os.path.isfile(path):
+        return jsonify({"error": "no csv yet"}), 404
+    return send_file(path, as_attachment=True, download_name="tide.csv", mimetype="text/csv")
+
+
+@app.route("/api/tide/delete", methods=["POST"])
+def tide_delete():
+    """Wipe tide.csv. Logging continues; the next poll backfills 7 days."""
+    res = tide.delete_csv()
+    if not res.get("ok"):
+        return jsonify(res), 500
+    return jsonify(res)
+
+
 @app.route("/api/solar/status", methods=["GET"])
 def solar_status():
     """Solar logger snapshot: enabled flag, host, interval, last sample,
@@ -1609,6 +1668,15 @@ def main() -> None:
         wq_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
     except Exception:
         logger.exception("wq_overlay.start failed")
+    # NOAA tide logger (Hilo Bay -> tide.csv) and its camera text overlay.
+    try:
+        tide.start(get_cfg=cfgmod.load)
+    except Exception:
+        logger.exception("tide.start failed")
+    try:
+        tide_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
+    except Exception:
+        logger.exception("tide_overlay.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

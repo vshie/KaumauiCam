@@ -30,6 +30,7 @@ import csv
 import io
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -85,6 +86,15 @@ CSV_HEADER: Tuple[str, ...] = (
     "timestamp_epoch",
     *[p[3] for p in PARAMS],
 )
+
+# The CSV keeps HydroVu's units; the Live tab and the video overlay show
+# these instead, converted in ``_collected_series``. Unlisted params are
+# shown in their CSV unit.
+DISPLAY_UNITS: Dict[str, str] = {"salinity": "ppt", "do": "percentSaturation"}
+
+# Practical salinity (psu) -> absolute salinity (g/kg, i.e. ppt) for
+# reference-composition seawater (TEOS-10: S_A = 35.16504/35 * S_P).
+PSU_TO_PPT = 35.16504 / 35.0
 
 # The Live tab charts only this trailing window; the CSV keeps everything.
 CHART_WINDOW_SECS = 7 * 24 * 3600
@@ -418,8 +428,50 @@ def _merge_rows(series: Dict[str, Dict[str, Any]]) -> int:
     return len(new)
 
 
+def _do_saturation_mg_l(temp_c: float, salinity: float) -> float:
+    """Oxygen solubility (mg/L) in water at ``temp_c`` and ``salinity``
+    (ppt/psu) under 1 atm, from Benson & Krause (1984) as given in
+    Standard Methods 4500-O. The sensors sit at sea level, so no pressure
+    correction."""
+    t = temp_c + 273.15
+    ln_c = (
+        -139.34411
+        + 1.575701e5 / t
+        - 6.642308e7 / t**2
+        + 1.243800e10 / t**3
+        - 8.621949e11 / t**4
+        - salinity * (1.7674e-2 - 1.0754e1 / t + 2.1407e3 / t**2)
+    )
+    return math.exp(ln_c)
+
+
+def _do_percent(do_mg_l: float, temp_c: float, salinity: float) -> float:
+    return 100.0 * do_mg_l / _do_saturation_mg_l(temp_c, salinity)
+
+
+def _to_display_units(raw: Dict[str, Dict[int, float]]) -> Dict[str, Dict[int, float]]:
+    """Convert ``{param: {secs: value}}`` from CSV units to ``DISPLAY_UNITS``.
+
+    DO % saturation needs that sample's temperature and salinity, so a DO
+    sample without both gets no value. A salinity of exactly 0 is a failed
+    conductivity cell (see ``ACTIVE_WINDOW_SECS``), not real water, and
+    would overstate the saturation level, so it doesn't count either.
+    """
+    out = dict(raw)
+    sal = raw.get("salinity") or {}
+    temp = raw.get("temperature") or {}
+    out["salinity"] = {secs: v * PSU_TO_PPT for secs, v in sal.items()}
+    out["do"] = {
+        secs: _do_percent(v, temp[secs], sal[secs] * PSU_TO_PPT)
+        for secs, v in (raw.get("do") or {}).items()
+        if secs in temp and sal.get(secs)
+    }
+    return out
+
+
 def _collected_series() -> Dict[str, Dict[str, Any]]:
-    """Every sample in the CSV as ``{param: {unit, points: [[ms, v], ...]}}``.
+    """Every sample in the CSV as ``{param: {unit, points: [[ms, v], ...]}}``,
+    in ``DISPLAY_UNITS``.
 
     Memoized on the file's mtime/size: the Live tab polls this far more
     often than the CSV changes.
@@ -433,19 +485,26 @@ def _collected_series() -> Dict[str, Dict[str, Any]]:
     if key == _series_memo[0] and _series_memo[1]:
         return _series_memo[1]
     rows = _read_csv()
-    out: Dict[str, Dict[str, Any]] = {}
-    for i, (pid, _label, unit, _col) in enumerate(PARAMS):
+    raw: Dict[str, Dict[int, float]] = {}
+    for i, (pid, _label, _unit, _col) in enumerate(PARAMS):
         idx = 2 + i
-        points = []
-        for secs in sorted(rows):
-            row = rows[secs]
+        vals: Dict[int, float] = {}
+        for secs, row in rows.items():
             if len(row) <= idx or not row[idx].strip():
                 continue
             try:
-                points.append([secs * 1000, float(row[idx])])
+                vals[secs] = float(row[idx])
             except ValueError:
                 continue
-        out[pid] = {"unit": unit, "points": points}
+        raw[pid] = vals
+    shown = _to_display_units(raw)
+    out: Dict[str, Dict[str, Any]] = {}
+    for pid, _label, unit, _col in PARAMS:
+        vals = shown[pid]
+        out[pid] = {
+            "unit": DISPLAY_UNITS.get(pid, unit),
+            "points": [[secs * 1000, vals[secs]] for secs in sorted(vals)],
+        }
     _series_memo = (key, out)
     return out
 
@@ -684,11 +743,11 @@ def latest() -> Dict[str, Any]:
     collected = _collected_series()
     _last_ms, newest_ms, active = _activity(collected)
     out: Dict[str, Any] = {}
-    for pid, label, unit, _col in PARAMS:
+    for pid, label, _unit, _col in PARAMS:
         if pid not in active:
             continue
         t_ms, v = collected[pid]["points"][-1]
-        out[pid] = {"label": label, "unit": unit, "value": v, "ts": t_ms / 1000.0}
+        out[pid] = {"label": label, "unit": collected[pid]["unit"], "value": v, "ts": t_ms / 1000.0}
     return {"params": out, "newest_ts": (newest_ms / 1000.0) if newest_ms else None}
 
 
@@ -721,7 +780,7 @@ def series() -> Dict[str, Any]:
         "location_id": _cached_location_id,
     }
     body["params"] = [
-        {"id": pid, "label": label, "unit": unit, "column": col}
+        {"id": pid, "label": label, "unit": DISPLAY_UNITS.get(pid, unit), "column": col}
         for pid, label, unit, col in PARAMS
     ]
     body["now"] = time.time()

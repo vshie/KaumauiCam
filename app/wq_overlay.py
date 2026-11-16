@@ -48,10 +48,10 @@ RETRY_S = 120.0
 SHOWN = (
     ("salinity", "Salinity", 2),
     ("ph", "pH", 2),
-    ("do", "DO", 2),
+    ("do", "DO", 0),
     ("temperature", "Temp", 1),
 )
-UNIT_TEXT = {"psu": "psu", "ph": "", "milligramsPerLiter": "mg/L", "celsius": "C"}
+UNIT_TEXT = {"ppt": "ppt", "ph": "", "percentSaturation": "%", "celsius": "C"}
 
 HST_OFFSET_S = -10 * 3600
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -92,28 +92,13 @@ def build_text(latest: Dict[str, Any]) -> Optional[str]:
     return line.replace("%", "%%")
 
 
-def _ours(cam: Any) -> List[int]:
-    return [
-        int(o["identity"])
-        for o in cam.overlay_list_text()
-        if str(o.get("text") or "").startswith(OVERLAY_PREFIX)
-    ]
-
-
 def _apply(cam: Any, text: Optional[str]) -> None:
-    ids = _ours(cam)
     if text is None:
-        for i in ids:
-            cam.overlay_remove(i)
+        for i in cam.overlay_remove_prefixed(OVERLAY_PREFIX):
             logger.info("wq_overlay: removed overlay %d", i)
         return
-    if ids:
-        cam.overlay_set_text(ids[0], text)
-        # Duplicates only appear if an earlier add raced a list; tidy them.
-        for i in ids[1:]:
-            cam.overlay_remove(i)
-    else:
-        i = cam.overlay_add_text(text, position=POSITION, font_size=FONT_SIZE)
+    i = cam.overlay_upsert_text(OVERLAY_PREFIX, text, position=POSITION, font_size=FONT_SIZE)
+    if i is not None:
         logger.info("wq_overlay: added overlay %d", i)
 
 

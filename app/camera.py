@@ -160,6 +160,41 @@ class AxisCamera:
     def overlay_remove(self, identity: int) -> None:
         self._overlay_call("remove", {"identity": int(identity)})
 
+    # Our overlays are found by a fixed text prefix rather than a stored
+    # identity, so they survive container restarts and camera reboots
+    # (dynamic overlays don't persist across a reboot). Overlays whose text
+    # doesn't start with the prefix are never touched.
+
+    def _overlay_ids_with_prefix(self, prefix: str) -> List[int]:
+        return [
+            int(o["identity"])
+            for o in self.overlay_list_text()
+            if str(o.get("text") or "").startswith(prefix)
+        ]
+
+    def overlay_upsert_text(
+        self, prefix: str, text: str, position: str = "bottomLeft", font_size: int = 32
+    ) -> Optional[int]:
+        """Set the text of our ``prefix`` overlay, adding it if missing.
+
+        Returns the new identity when one was added, else None.
+        """
+        ids = self._overlay_ids_with_prefix(prefix)
+        if ids:
+            self.overlay_set_text(ids[0], text)
+            # Duplicates only appear if an earlier add raced a list; tidy them.
+            for i in ids[1:]:
+                self.overlay_remove(i)
+            return None
+        return self.overlay_add_text(text, position=position, font_size=font_size)
+
+    def overlay_remove_prefixed(self, prefix: str) -> List[int]:
+        """Remove every overlay whose text starts with ``prefix``; returns their ids."""
+        ids = self._overlay_ids_with_prefix(prefix)
+        for i in ids:
+            self.overlay_remove(i)
+        return ids
+
     def stream_profile_add(self) -> Optional[str]:
         """
         Create a new (empty) StreamProfile slot via VAPIX `action=add`.

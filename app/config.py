@@ -114,6 +114,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # (and so the YouTube stream) via an Axis text overlay; see
     # app/wq_overlay.py. Off removes the overlay from the camera.
     "wq_overlay_enabled": True,
+    # NOAA tide logger (see app/tide.py): observed water level at Hilo Bay
+    # (station 1617760, metres above MLLW) every 15 minutes into
+    # /app/data/tide.csv, plus NOAA's predicted curve and highs/lows for
+    # the Live tab's tide chart.
+    "tide_enabled": True,
+    "tide_interval_secs": 900.0,
+    # Burn the current level, trend and next high/low into the camera
+    # video via an Axis text overlay (top-right); see app/tide_overlay.py.
+    "tide_overlay_enabled": True,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

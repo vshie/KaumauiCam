@@ -1097,3 +1097,99 @@ tr.sess-stopped td { color: var(--muted); }
   display: none;
 }
 
+
+/* ---- Tide chart (Live tab) ----------------------------------------------
+   One wide chart on a fixed [now - 48 h, now + 24 h] axis: observed level
+   solid, NOAA prediction dashed, a "now" line, and high/low labels placed
+   as HTML over the SVG so they don't stretch with it. */
+.tide-panel {
+  margin-top: 1.1rem;
+}
+
+.tide-chart {
+  height: 230px;
+  margin: 0.4rem 0 0.3rem;
+}
+
+.tide-chart .wq-chart-head {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.tide-next {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.tide-plot {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.tide-obs {
+  stroke: #7dd3fc;
+}
+
+.tide-pred {
+  fill: none;
+  stroke: rgba(232, 244, 248, 0.45);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.tide-now {
+  stroke: #fbbf24;
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.tide-event {
+  position: absolute;
+  font-size: 0.62rem;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tide-event-high {
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.tide-event-low {
+  bottom: 0;
+  transform: translateX(-50%);
+}
+
+.tide-axis {
+  position: relative;
+  height: 0.9rem;
+  margin-top: 0.15rem;
+  font-size: 0.62rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tide-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.wq-chart-empty .tide-pred,
+.wq-chart-empty .tide-now {
+  display: none;
+}
+
+/* Phone width: the high/low labels would collide; the header still shows
+   the next one. */
+@media (max-width: 600px) {
+  .tide-event {
+    display: none;
+  }
+}
