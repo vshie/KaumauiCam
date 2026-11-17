@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import requests
@@ -56,6 +56,85 @@ class AxisCamera:
         params.update(updates)
         r = self._get("/axis-cgi/param.cgi", params=params)
         r.raise_for_status()
+
+    # --- Dynamic Overlay API (AXIS OS JSON API, v1.7 on Kaumaui's M5526-E) -----
+    # Text drawn by the camera's encoder, so it lands in every stream from
+    # the channel (YouTube's stream-copied H.264 included) at no CPU cost
+    # to the Pi. Overlays are addressed by an integer ``identity``.
+
+    _OVERLAY_CGI = "/axis-cgi/dynamicoverlay/dynamicoverlay.cgi"
+    _OVERLAY_API_VERSION = "1.7"
+
+    def _overlay_call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        r = self._post(
+            self._OVERLAY_CGI,
+            json={"apiVersion": self._OVERLAY_API_VERSION, "method": method, "params": params},
+        )
+        r.raise_for_status()
+        body = r.json() or {}
+        err = body.get("error")
+        if err:
+            raise RuntimeError(f"dynamicoverlay {method}: {err.get('code')} {err.get('message')}")
+        return body.get("data") or {}
+
+    def overlay_list_text(self) -> List[Dict[str, Any]]:
+        return list(self._overlay_call("list", {}).get("textOverlays") or [])
+
+    def overlay_add_text(self, text: str, position: str = "bottomLeft", font_size: int = 32) -> int:
+        data = self._overlay_call(
+            "addText",
+            {
+                "camera": 1,
+                "text": text,
+                "position": position,
+                "fontSize": int(font_size),
+                "textColor": "white",
+                "textBGColor": "semiTransparent",
+                "textOLColor": "black",
+            },
+        )
+        return int(data["identity"])
+
+    def overlay_set_text(self, identity: int, text: str) -> None:
+        self._overlay_call("setText", {"identity": int(identity), "text": text})
+
+    def overlay_remove(self, identity: int) -> None:
+        self._overlay_call("remove", {"identity": int(identity)})
+
+    # Our overlays are found by a fixed text prefix rather than a stored
+    # identity, so they survive container restarts and camera reboots
+    # (dynamic overlays don't persist across a reboot). Overlays whose text
+    # doesn't start with the prefix are never touched.
+
+    def _overlay_ids_with_prefix(self, prefix: str) -> List[int]:
+        return [
+            int(o["identity"])
+            for o in self.overlay_list_text()
+            if str(o.get("text") or "").startswith(prefix)
+        ]
+
+    def overlay_upsert_text(
+        self, prefix: str, text: str, position: str = "bottomLeft", font_size: int = 32
+    ) -> Optional[int]:
+        """Set the text of our ``prefix`` overlay, adding it if missing.
+
+        Returns the new identity when one was added, else None.
+        """
+        ids = self._overlay_ids_with_prefix(prefix)
+        if ids:
+            self.overlay_set_text(ids[0], text)
+            # Duplicates only appear if an earlier add raced a list; tidy them.
+            for i in ids[1:]:
+                self.overlay_remove(i)
+            return None
+        return self.overlay_add_text(text, position=position, font_size=font_size)
+
+    def overlay_remove_prefixed(self, prefix: str) -> List[int]:
+        """Remove every overlay whose text starts with ``prefix``; returns their ids."""
+        ids = self._overlay_ids_with_prefix(prefix)
+        for i in ids:
+            self.overlay_remove(i)
+        return ids
 
     def stream_profile_add(self) -> Optional[str]:
         """

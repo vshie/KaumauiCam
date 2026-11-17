@@ -418,9 +418,9 @@ button.btn-danger {
 }
 
 /* Right column: its reporting graphs (--wq-graphs, 0-2 as sensors drop
-   out) plus a taller C3 tile (snapshot + motion list). */
+   out), the tide chart, then a taller C3 tile (snapshot + motion list). */
 .wq-column.wq-column-snap {
-  grid-template-rows: repeat(var(--wq-graphs, 2), minmax(0, 1fr)) minmax(0, 1.6fr);
+  grid-template-rows: repeat(var(--wq-graphs, 2), minmax(0, 1fr)) minmax(0, 1fr) minmax(0, 1.6fr);
 }
 
 /* C3 stereo snapshot tile: same frame as a graph, image letterboxed. */
@@ -1302,4 +1302,101 @@ tr.sess-stopped td { color: var(--muted); }
   border-radius: var(--radius-sm);
   text-align: center;
   user-select: all;
+}
+
+/* ---- Tide chart (Live tab) ----------------------------------------------
+   A tile in the right column on a fixed [now - 48 h, now + 24 h] axis: observed level
+   solid, NOAA prediction dashed, a "now" line, and high/low labels placed
+   as HTML over the SVG so they don't stretch with it. */
+.tide-chart .wq-chart-head {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.tide-next-line {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tide-plot {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.tide-obs {
+  stroke: #7dd3fc;
+}
+
+.tide-pred {
+  fill: none;
+  stroke: rgba(232, 244, 248, 0.45);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.tide-now {
+  stroke: #fbbf24;
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.tide-event {
+  position: absolute;
+  font-size: 0.62rem;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.tide-event-high {
+  top: 0;
+  transform: translateX(-50%);
+}
+
+.tide-event-low {
+  bottom: 0;
+  transform: translateX(-50%);
+}
+
+.tide-axis {
+  position: relative;
+  height: 0.9rem;
+  margin-top: 0.15rem;
+  font-size: 0.62rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tide-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.wq-chart-empty .tide-pred,
+.wq-chart-empty .tide-now {
+  display: none;
+}
+
+/* Phone width: the high/low labels would collide; the line under the
+   chart still shows the next one. */
+@media (max-width: 600px) {
+  .tide-event {
+    display: none;
+  }
+}
+
+@media (min-width: 2000px) {
+  .tide-event,
+  .tide-axis     { font-size: 0.75rem; }
+  .tide-next-line { font-size: 0.9rem; }
 }

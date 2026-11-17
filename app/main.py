@@ -22,6 +22,8 @@ import link_uptime
 import orca
 import stereo_motion
 import stereo_snapshot
+import tide
+import tide_overlay
 import youtube_api
 import youtube_monitor
 from camera import AxisCamera
@@ -407,7 +409,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.5.6"
+_EXTENSION_VERSION = "0.5.7"
 
 YOUTUBE_STREAM_PROFILE = "youtubelive"
 
@@ -935,6 +937,10 @@ def api_config():
             hydrovu.poke()
         except Exception:
             logger.exception("hydrovu.poke after config save failed")
+    if any(k in data for k in ("tide_enabled", "tide_interval_secs")):
+        tide.poke()
+    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled")):
+        tide_overlay.poke()
     out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
     out.pop("hydrovu_token", None)
     return jsonify(out)
@@ -1362,6 +1368,59 @@ def hydrovu_delete():
     """Wipe hydrovu.csv. Logging continues; the next poll re-fetches the
     full 7-day window and repopulates the file."""
     res = hydrovu.delete_csv()
+    if not res.get("ok"):
+        return jsonify(res), 500
+    return jsonify(res)
+
+
+@app.route("/api/tide/series", methods=["GET"])
+def tide_series():
+    """Tide chart data for the Live tab: observed level for the last 48 h
+    (from tide.csv), NOAA's predicted curve from -48 h to +24 h, and the
+    predicted highs/lows in that window."""
+    return jsonify(tide.series())
+
+
+@app.route("/api/tide/status", methods=["GET"])
+def tide_status():
+    """Poller state for the Settings tab plus a CSV preview and the
+    video overlay status."""
+    try:
+        st = tide.status()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    try:
+        st["preview"] = tide.csv_preview(max_rows=5)
+    except Exception:
+        st["preview"] = ""
+    st["overlay"] = tide_overlay.status()
+    return jsonify(st)
+
+
+@app.route("/api/tide/poke", methods=["POST"])
+def tide_poke():
+    tide.poke()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tide/refresh", methods=["POST"])
+def tide_refresh():
+    """One-shot synchronous NOAA fetch; returns the result inline."""
+    return jsonify(tide.refresh_now())
+
+
+@app.route("/api/tide/download", methods=["GET"])
+def tide_download():
+    path = tide.csv_path()
+    if not os.path.isfile(path):
+        return jsonify({"error": "no csv yet"}), 404
+    return send_file(path, as_attachment=True, download_name="tide.csv", mimetype="text/csv")
+
+
+@app.route("/api/tide/delete", methods=["POST"])
+def tide_delete():
+    """Wipe tide.csv. Logging continues; the next poll backfills 7 days."""
+    res = tide.delete_csv()
     if not res.get("ok"):
         return jsonify(res), 500
     return jsonify(res)
@@ -2046,6 +2105,16 @@ def main() -> None:
         hydrovu.start(get_cfg=cfgmod.load)
     except Exception:
         logger.exception("hydrovu.start failed")
+    # NOAA tide logger (Hilo Bay -> tide.csv) and its Axis text overlay,
+    # which reaches YouTube via the stream-copied youtubelive profile.
+    try:
+        tide.start(get_cfg=cfgmod.load)
+    except Exception:
+        logger.exception("tide.start failed")
+    try:
+        tide_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
+    except Exception:
+        logger.exception("tide_overlay.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

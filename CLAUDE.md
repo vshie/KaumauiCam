@@ -19,6 +19,7 @@ A BlueOS extension ("Wailoa Cam") running in Docker on an **amd64** BlueOS host.
 - Starlink link-uptime logging.
 - Orca camera `/data` CSV logging.
 - HydroVu water-quality scraping.
+- NOAA tide logging (Hilo Bay, station 1617760) with a Live-tab chart and an Axis text overlay on the YouTube video.
 
 `README.md` has the feature spec and the API table, but parts of it are stale (it still mentions multi-arch CI and the `vshie/WailoaCam` repo).
 
@@ -60,6 +61,7 @@ Runtime: the entrypoint runs `python3 -u /app/main.py`. The UI/API listens on `P
   - SQLite `/app/data/state.db` (overridable with `WAILOA_STATE_DB`) is shared by `bandwidth.py`, `link_uptime.py` (8.8.8.8 ping every 10 s), and `youtube_monitor.py`. Each module owns its tables and a lock.
   - `orca.py` appends to `/app/data/orca.csv`. Columns are the camera's `/data` keys converted to snake_case, plus a trailing raw `payload_json`.
   - `hydrovu.py` uses undocumented HydroVu SPA endpoints with a public token. `hydrovu.csv` is the source of truth. Hourly polls fetch only from the HydroVu time slice holding the newest CSV sample. Slices are epoch-aligned 491520 s buckets matched by start time, so a query must start on a boundary or the whole slice is dropped. The first poll after a start or a CSV delete backfills 30 days. The Live tab charts the last 7 days of it (`CHART_WINDOW_SECS`), and hides any parameter with no non-zero sample within `ACTIVE_WINDOW_SECS` (4 h) of the sonde's newest sample. That window is measured against the sonde, not the wall clock, so a sonde that has gone quiet doesn't blank every chart. All HydroVu API knowledge lives in that module.
+- **Tide** (`tide.py`, `tide_overlay.py`): polls NOAA's public CO-OPS API every 15 min. Observed water level is merged into `/app/data/tide.csv`; predictions and highs/lows stay in memory. `tide_overlay` keeps one Axis Dynamic Overlay text (found by its `Tide` prefix, so it survives restarts and camera reboots) on the YouTube camera, top-right, via `AxisCamera.overlay_upsert_text`.
 - **Frontend**: a single `app/static/index.html` (Vue 3 global build, no build step) plus `styles.css`.
 
 ## Conventions

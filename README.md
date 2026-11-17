@@ -140,6 +140,13 @@ timestamp_iso, timestamp_epoch, voltage, current, internal_temperature, external
 
 CamelCase keys are stored as snake_case. Nested objects (if the camera adds them later) become `parent_child` columns. `payload_json` keeps the raw body so newly added camera keys are never lost.
 
+### Tide (NOAA 1617760, Hilo Bay)
+
+The extension reads the water level at NOAA station **1617760 (Hilo, Hilo Bay, Kuhio Bay)**, next to the Wailoa River mouth, from NOAA's public CO-OPS data API every 15 minutes (no key needed). Values are in metres above MLLW. Observed 6-minute samples are merged into **`/app/data/tide.csv`** (`timestamp_iso, timestamp_epoch, water_level_m, quality`). The first fetch after a start or a CSV delete backfills 7 days. Each later fetch re-reads the last hour, so NOAA's corrections to preliminary values (`quality = p`) are picked up. NOAA's predicted tide and highs/lows are fetched each time and kept in memory only.
+
+- **Live tab:** a tile in the right column showing the last 48 h of observed level (solid) and the next 24 h of NOAA's prediction (dashed), with a "now" line, the times of predicted highs/lows, and the next high/low under the chart.
+- **Video overlay:** the Axis camera draws the current level, whether it's rising or falling (30-minute averages, so wave noise doesn't flip it), the next predicted high or low, and the measurement time in the top-right corner, e.g. `Tide 0.62 m MLLW, falling | next low 0.20 m 16:49 | 11:36 HST` (`app/tide_overlay.py`, Axis Dynamic Overlay API). YouTube stream-copies the Axis `youtubelive` profile, so the overlay appears on the stream at no CPU cost. The live preview and mono recordings come from the fixed RTSP camera and don't show it. It is hidden when NOAA's newest observation is more than 2 h old. Toggle it under **Settings → Tide (NOAA)**.
+
 ## Push this repo (you deploy)
 
 Repository: **https://github.com/vshie/WailoaCam**
@@ -184,6 +191,12 @@ git push -u origin main
 | GET | `/api/orca/download` | Download `orca.csv` (cumulative, header + timestamp_iso first column) |
 | POST | `/api/orca/delete` | Wipe `orca.csv` (logging continues, next row appears at the next poll) |
 | POST | `/api/orca/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
+| GET | `/api/tide/series` | Observed tide (last 48 h), NOAA prediction (-48 h to +24 h), highs/lows, current level |
+| GET | `/api/tide/status` | Tide poller status, CSV size/rows, 5-row preview, video overlay status |
+| POST | `/api/tide/refresh` | Fetch from NOAA now and return the result |
+| POST | `/api/tide/poke` | Wake the tide poller thread |
+| GET | `/api/tide/download` | Download `tide.csv` |
+| POST | `/api/tide/delete` | Wipe `tide.csv` (next poll backfills 7 days) |
 | POST | `/api/camera/ensure-livepreview` | Re-render the go2rtc config for the fixed camera stream |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |

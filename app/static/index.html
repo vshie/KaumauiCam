@@ -103,7 +103,7 @@
               <div class="live-frame">
                 <video ref="liveVideo" playsinline autoplay muted></video>
               </div>
-              <aside class="wq-column wq-column-right wq-column-snap" aria-label="Water quality (right)" :style="{ '--wq-rows': wqRightParams.length + 1, '--wq-graphs': wqRightParams.length }">
+              <aside class="wq-column wq-column-right wq-column-snap" aria-label="Water quality, tide and stereo camera (right)" :style="{ '--wq-rows': wqRightParams.length + 2, '--wq-graphs': wqRightParams.length }">
                 <div
                   v-for="p in wqRightParams"
                   :key="'wq-right-' + p.id"
@@ -135,6 +135,42 @@
                     </div>
                   </div>
                   <p class="wq-chart-status" v-if="!wqChart(p.id).points.length">{{ wqEmptyLine }}</p>
+                </div>
+                <div class="wq-chart tide-chart" :class="{ 'wq-chart-empty': !tideChart.hasData }" :title="tideStatusLine">
+                  <div class="wq-chart-head">
+                    <span class="wq-chart-label">Tide</span>
+                    <span class="wq-chart-unit">m MLLW</span>
+                    <span class="wq-chart-value">{{ tideChart.valueText }}</span>
+                  </div>
+                  <div class="wq-chart-body">
+                    <div class="tide-plot">
+                      <svg
+                        class="wq-chart-svg"
+                        viewBox="0 0 300 80"
+                        preserveAspectRatio="none"
+                        role="img"
+                        aria-label="Hilo Bay tide, observed last 48 hours and predicted next 24 hours"
+                      >
+                        <line v-for="y in [20, 40, 60]" :key="'tg' + y" :x1="0" :x2="300" :y1="y" :y2="y" class="wq-grid" />
+                        <line v-for="t in tideChart.ticks" :key="'tt' + t.ms" :x1="t.x" :x2="t.x" :y1="0" :y2="80" class="wq-grid" />
+                        <polyline v-if="tideChart.predictedSvg" :points="tideChart.predictedSvg" class="tide-pred" />
+                        <polyline v-if="tideChart.observedSvg" :points="tideChart.observedSvg" class="wq-line tide-obs" />
+                        <line v-if="tideChart.hasData" :x1="tideChart.nowX" :x2="tideChart.nowX" :y1="0" :y2="80" class="tide-now" />
+                      </svg>
+                      <span
+                        v-for="e in tideChart.events"
+                        :key="'te' + e.ms"
+                        class="tide-event"
+                        :class="e.type === 'H' ? 'tide-event-high' : 'tide-event-low'"
+                        :style="{ left: e.leftPct + '%' }"
+                      >{{ e.label }}</span>
+                    </div>
+                    <div class="tide-axis" aria-hidden="true">
+                      <span v-for="t in tideChart.ticks" :key="'ta' + t.ms" :style="{ left: t.leftPct + '%' }">{{ t.label }}</span>
+                    </div>
+                  </div>
+                  <p class="wq-chart-status" v-if="!tideChart.hasData">{{ tideEmptyLine }}</p>
+                  <p class="tide-next-line" v-else-if="tideChart.nextText">Hilo Bay · {{ tideChart.nextText }}</p>
                 </div>
                 <div class="wq-chart c3-snap" :class="{ 'wq-chart-empty': !stereoSnap.available }">
                   <div class="wq-chart-head">
@@ -710,6 +746,37 @@
               <pre class="reading-preview" v-if="wqStatus.preview">{{ wqStatus.preview }}</pre>
               <p class="status-line hint" v-else>CSV is empty.</p>
             </div>
+            <div class="panel">
+              <h2>
+                Tide (NOAA)
+                <span class="badge" :class="tideBadgeClass">{{ tideBadgeText }}</span>
+              </h2>
+              <p class="status-line">Fetches the observed water level at Hilo, Hilo Bay, Kuhio Bay (NOAA station {{ tideStatus.station || "1617760" }}, metres above MLLW) from NOAA's public tides &amp; currents API, plus NOAA's predicted tide and highs/lows. Observed 6-minute samples are merged into <code>/app/data/tide.csv</code>; the first fetch after a start or CSV delete backfills 7 days. The Live tab charts the last 48 hours observed and the next 24 hours predicted.</p>
+              <label class="ck-row">
+                <input type="checkbox" v-model="tideEnabled" />
+                Enable tide logging
+              </label>
+              <label class="ck-row">
+                <input type="checkbox" v-model="tideOverlayEnabled" />
+                Show current tide level and next high/low on the YouTube video
+              </label>
+              <p class="status-line hint">Drawn by the Axis camera in the top-right corner, so it appears on the YouTube stream. The live preview and mono recordings come from the other camera and don't show it. Hidden when NOAA's newest observation is more than 2 hours old.</p>
+              <label>Refresh interval (seconds)</label>
+              <input type="number" v-model.number="tideIntervalSecs" min="360" max="3600" step="60" />
+              <p class="status-line hint">NOAA posts a new observation every 6 minutes; 900 (15 minutes) is the default.</p>
+              <div class="row row-actions-spaced">
+                <button type="button" class="btn" @click="saveTide">Save</button>
+                <button type="button" class="btn btn-secondary" @click="refreshTideNow">Refresh now</button>
+                <a class="btn btn-secondary" :href="kmUrl('/api/tide/download')" :class="{ 'is-disabled': !tideStatus.csv_size_bytes }">Download CSV</a>
+                <button type="button" class="btn btn-danger" :disabled="!tideStatus.csv_size_bytes" @click="deleteTideCsv">Delete CSV</button>
+              </div>
+              <p class="status-line">{{ tideSettingsLine }}</p>
+              <p class="status-line err" v-if="tideStatus.last_error">{{ tideStatus.last_error }}</p>
+              <p class="status-line" v-if="tideOverlayLine">{{ tideOverlayLine }}</p>
+              <h2 class="h2-spaced">CSV preview <span class="badge badge-muted">last 5 rows</span></h2>
+              <pre class="reading-preview" v-if="tideStatus.preview">{{ tideStatus.preview }}</pre>
+              <p class="status-line hint" v-else>CSV is empty.</p>
+            </div>
           </section>
         </main>
         <footer class="site-footer" role="contentinfo">
@@ -1250,6 +1317,21 @@
                 wqHydrovuIntervalSecs: 3600,
                 wqRefreshTimer: null,
                 hydrovuTokenSet: false,
+                // NOAA tide chart (Live tab): /api/tide/series as-is.
+                tideSeries: null,
+                tideStatus: {
+                  enabled: true,
+                  station: "1617760",
+                  last_fetched_ts: null,
+                  last_error: null,
+                  interval_secs: 900,
+                  rows_logged: 0,
+                  csv_size_bytes: 0,
+                  preview: "",
+                },
+                tideEnabled: true,
+                tideOverlayEnabled: true,
+                tideIntervalSecs: 900,
                 pc: null,
               };
             },
@@ -1581,6 +1663,133 @@
                 if (s.location_id) parts.push("loc " + s.location_id);
                 return parts.join(" · ") + ".";
               },
+              tideChart: function () {
+                // Observed (solid) and predicted (dashed) water level on one
+                // fixed [now - 48 h, now + 24 h] axis from the backend, a
+                // "now" line, and the predicted highs/lows as HTML labels
+                // (SVG text would stretch under preserveAspectRatio="none").
+                var s = this.tideSeries || {};
+                var obs = s.observed || [];
+                var pred = s.predicted || [];
+                var startMs = s.start_ms;
+                var endMs = s.end_ms;
+                var out = {
+                  hasData: false,
+                  observedSvg: "",
+                  predictedSvg: "",
+                  nowX: 200,
+                  events: [],
+                  ticks: [],
+                  valueText: "—",
+                  nextText: "",
+                };
+                var latest = s.latest || {};
+                if (latest.level_m != null && !latest.stale) {
+                  out.valueText = latest.level_m.toFixed(2) + (latest.trend ? " · " + latest.trend : "");
+                }
+                if (latest.next_event) {
+                  var ne = latest.next_event;
+                  out.nextText = "next " + (ne.type === "H" ? "high" : "low") + " " +
+                    ne.level_m.toFixed(2) + " m at " + this.fmtHstHm(ne.ts * 1000);
+                }
+                if (!startMs || !endMs || (!obs.length && !pred.length)) return out;
+                var vals = obs.concat(pred).map(function (pt) { return pt[1]; });
+                var lo = Math.min.apply(null, vals);
+                var hi = Math.max.apply(null, vals);
+                // Headroom above/below the curve for the high/low labels.
+                var pad = Math.max(0.05, (hi - lo) * 0.2);
+                lo -= pad;
+                hi += pad;
+                var span = endMs - startMs;
+                out.hasData = true;
+                out.observedSvg = this.chartPoints(obs, startMs, endMs, lo, hi, 300);
+                out.predictedSvg = this.chartPoints(pred, startMs, endMs, lo, hi, 300);
+                out.nowX = ((s.now * 1000 - startMs) / span) * 300;
+                var self = this;
+                out.events = (s.events || []).map(function (e) {
+                  return {
+                    ms: e.ms,
+                    type: e.type,
+                    // Kept off the edges so a centred label isn't clipped.
+                    // Highs label the top edge and lows the bottom, clear
+                    // of the curves (observed often runs above predicted).
+                    // Time only: the side-column tile is too narrow for
+                    // levels too; the line under the chart gives the next
+                    // high/low with its height.
+                    leftPct: Math.min(96, Math.max(4, ((e.ms - startMs) / span) * 100)),
+                    label: self.fmtHstHm(e.ms),
+                  };
+                });
+                // Gridlines at HST midnight and noon (10:00 / 22:00 UTC).
+                var hstOffset = 10 * 3600 * 1000;
+                var half = 12 * 3600 * 1000;
+                var days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                for (var t = Math.ceil((startMs - hstOffset) / half) * half + hstOffset; t < endMs; t += half) {
+                  var local = new Date(t - hstOffset);
+                  // A centred label this close to an edge would be clipped.
+                  if ((t - startMs) / span < 0.03 || (t - startMs) / span > 0.97) continue;
+                  out.ticks.push({
+                    ms: t,
+                    x: ((t - startMs) / span) * 300,
+                    leftPct: ((t - startMs) / span) * 100,
+                    label: local.getUTCHours() === 0 ? days[local.getUTCDay()] : "12:00",
+                  });
+                }
+                return out;
+              },
+              tideEmptyLine: function () {
+                var s = this.tideStatus || {};
+                if (!s.enabled) return "Tide logging paused";
+                if (s.last_error) return "Fetch error";
+                if (!s.last_fetched_ts) return "Waiting for first fetch…";
+                return "No tide data";
+              },
+              tideStatusLine: function () {
+                var s = this.tideStatus;
+                if (!s) return "";
+                if (!s.enabled) return "Tide logging paused";
+                if (s.last_error) return "NOAA: " + s.last_error;
+                if (!s.last_fetched_ts) return "NOAA: waiting for first fetch…";
+                var parts = ["NOAA 1617760 fetched " + this.fmtRelative(s.last_fetched_ts, s.now)];
+                if (s.newest_sample_ts) {
+                  parts.push("level measured " + this.fmtRelative(s.newest_sample_ts, s.now));
+                }
+                parts.push("solid = observed (preliminary), dashed = predicted");
+                return parts.join(" · ");
+              },
+              tideOverlayLine: function () {
+                var o = (this.tideStatus || {}).overlay;
+                if (!o) return "";
+                if (o.error) return "Tide overlay: camera error — " + o.error;
+                if (!this.tideOverlayEnabled) return "Tide overlay: off";
+                if (o.text) return "On video: " + o.text;
+                return o.applied_ts ? "Tide overlay: no current level, hidden" : "";
+              },
+              tideBadgeText: function () {
+                var s = this.tideStatus || {};
+                if (!s.enabled) return "Disabled";
+                if (s.last_error) return "Warning";
+                if (s.last_fetched_ts) return "Logging";
+                return "Starting";
+              },
+              tideBadgeClass: function () {
+                var s = this.tideStatus || {};
+                if (!s.enabled) return "badge-muted";
+                if (s.last_error) return "badge-warn";
+                if (s.last_fetched_ts) return "badge-good";
+                return "";
+              },
+              tideSettingsLine: function () {
+                var s = this.tideStatus || {};
+                var parts = [];
+                parts.push(s.enabled ? "Enabled" : "Disabled");
+                parts.push("interval " + Math.round(s.interval_secs || 0) + "s");
+                parts.push((s.rows_logged || 0) + " row" + (s.rows_logged === 1 ? "" : "s"));
+                parts.push(this.fmtBytes(s.csv_size_bytes || 0));
+                if (s.last_fetched_ts) parts.push("last fetch " + this.fmtRelative(s.last_fetched_ts, s.now));
+                if (s.station_name) parts.push(s.station_name);
+                return parts.join(" · ") + ".";
+              },
               hydrovuHasPoints: function () {
                 var pts = (this.wqStatus && this.wqStatus.series_points) || {};
                 for (var k in pts) {
@@ -1712,6 +1921,9 @@
                       ? c.hydrovu_interval_secs
                       : 3600;
                     self.hydrovuTokenSet = !!c.hydrovu_token_set;
+                    self.tideEnabled = c.tide_enabled !== false;
+                    self.tideOverlayEnabled = c.tide_overlay_enabled !== false;
+                    self.tideIntervalSecs = c.tide_interval_secs != null ? c.tide_interval_secs : 900;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
                   })
@@ -2486,29 +2698,179 @@
                 // rescaling to fill the frame.
                 var nowMs = Date.now();
                 var startMs = nowMs - 7 * 86400 * 1000;
-                var span = nowMs - startMs;
                 var vals = points.map(function (pt) { return pt[1]; });
                 var lo = Math.min.apply(null, vals);
                 var hi = Math.max.apply(null, vals);
+                out.svgPoints = this.chartPoints(points, startMs, nowMs, lo, hi, 200);
+                return out;
+              },
+              chartPoints: function (points, startMs, endMs, lo, hi, width) {
+                // ``[[ms, value], ...]`` -> SVG polyline points on a
+                // ``width`` x 80 viewBox, x clamped to [startMs, endMs].
+                if (!points || !points.length) return "";
                 if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
                 if (hi - lo < 1e-9) {
                   var eps = Math.max(0.5, Math.abs(hi) * 0.05);
                   lo -= eps; hi += eps;
                 }
+                var span = endMs - startMs;
                 var svg = "";
-                for (var i = 0; i < count; i++) {
-                  var t = points[i][0];
-                  var v = points[i][1];
-                  var x = ((t - startMs) / span) * 200;
+                for (var i = 0; i < points.length; i++) {
+                  var x = ((points[i][0] - startMs) / span) * width;
                   if (x < 0) x = 0;
-                  if (x > 200) x = 200;
+                  if (x > width) x = width;
                   // Reserve a top/bottom margin of 5 so the polyline
                   // doesn't sit exactly on the chart edge.
-                  var y = 75 - ((v - lo) / (hi - lo)) * 70;
+                  var y = 75 - ((points[i][1] - lo) / (hi - lo)) * 70;
                   svg += (i === 0 ? "" : " ") + x.toFixed(2) + "," + y.toFixed(2);
                 }
-                out.svgPoints = svg;
-                return out;
+                return svg;
+              },
+              fmtHstHm: function (ms) {
+                // HST is a constant UTC-10 offset, so no tzdata needed.
+                var d = new Date(ms - 10 * 3600 * 1000);
+                return ("0" + d.getUTCHours()).slice(-2) + ":" + ("0" + d.getUTCMinutes()).slice(-2);
+              },
+              pollTideSeries: function () {
+                var self = this;
+                return this.api("GET", "/api/tide/series")
+                  .then(function (body) {
+                    if (body) self.tideSeries = body;
+                  })
+                  .catch(function () {});
+              },
+              pollTideStatus: function () {
+                var self = this;
+                return this.api("GET", "/api/tide/status")
+                  .then(function (s) {
+                    if (s) self.tideStatus = s;
+                  })
+                  .catch(function () {});
+              },
+              saveTide: function () {
+                var self = this;
+                var patch = {
+                  tide_enabled: !!this.tideEnabled,
+                  tide_overlay_enabled: !!this.tideOverlayEnabled,
+                  tide_interval_secs: Math.max(360, Math.min(3600, parseFloat(this.tideIntervalSecs) || 900)),
+                };
+                this.api("POST", "/api/config", patch).then(function () {
+                  alert("Saved.");
+                  self.loadConfig({ force: true });
+                  self.pollTideStatus();
+                  setTimeout(function () { self.pollTideSeries(); }, 3000);
+                });
+              },
+              refreshTideNow: function () {
+                var self = this;
+                this.api("POST", "/api/tide/refresh", {})
+                  .then(function (res) {
+                    if (res && res.ok) {
+                      self.pollTideSeries();
+                    } else {
+                      alert("Refresh failed: " + ((res && res.message) || "unknown error"));
+                    }
+                    self.pollTideStatus();
+                  })
+                  .catch(function (e) {
+                    alert("Refresh failed: " + (e && e.message ? e.message : e));
+                  });
+              },
+              deleteTideCsv: function () {
+                var self = this;
+                if (!confirm("Delete tide.csv? Logging continues; the next fetch rebuilds the file with the last 7 days of data.")) return;
+                var typed = prompt('Type "DELETE" to confirm.');
+                if (typed !== "DELETE") {
+                  alert("Cancelled — nothing was deleted.");
+                  return;
+                }
+                this.api("POST", "/api/tide/delete", {}).then(function (res) {
+                  self.pollTideStatus();
+                  if (res && res.deleted) alert("Deleted " + res.path);
+                  else alert("No file to delete.");
+                });
+              },
+              fmtWqValue: function (v) {
+                if (v === null || v === undefined) return "—";
+                var n = Number(v);
+                if (!isFinite(n)) return "—";
+                var abs = Math.abs(n);
+                var digits = abs >= 100 ? 0 : abs >= 10 ? 1 : abs >= 1 ? 2 : 3;
+                return n.toFixed(digits);
+              },
+              pollHydrovuSeries: function () {
+                var self = this;
+                return this.api("GET", "/api/hydrovu/series")
+                  .then(function (body) {
+                    self.wqSeries = (body && body.series) || {};
+                    self.wqFetchedTs = (body && body.fetched_ts) || 0;
+                    self.wqActive = (body && body.active) || null;
+                    self.wqNewestSampleMs = (body && body.newest_sample_ms) || null;
+                  })
+                  .catch(function () {});
+              },
+              pollHydrovuStatus: function () {
+                var self = this;
+                return this.api("GET", "/api/hydrovu/status")
+                  .then(function (s) {
+                    if (s) self.wqStatus = s;
+                  })
+                  .catch(function () {});
+              },
+              saveHydrovu: function () {
+                var self = this;
+                var patch = {
+                  hydrovu_enabled: !!this.wqHydrovuEnabled,
+                  wq_overlay_enabled: !!this.wqOverlayEnabled,
+                  hydrovu_interval_secs: Math.max(60, Math.min(24 * 3600,
+                    parseFloat(this.wqHydrovuIntervalSecs) || 3600)),
+                };
+                var token = String(this.wqHydrovuTokenInput || "").trim();
+                // Only send the token when the operator actually typed
+                // something; the backend ignores empty tokens on POST
+                // to preserve the saved one across unrelated Settings
+                // saves.
+                if (token) patch.hydrovu_token = token;
+                this.api("POST", "/api/config", patch).then(function () {
+                  self.wqHydrovuTokenInput = "";
+                  alert("Saved.");
+                  self.loadConfig({ force: true });
+                  self.pollHydrovuStatus();
+                  // Ask the poller to refresh right away so charts show
+                  // fresh data without waiting an hour.
+                  self.api("POST", "/api/hydrovu/poke", {}).catch(function () {});
+                  setTimeout(function () { self.pollHydrovuSeries(); }, 3000);
+                });
+              },
+              refreshHydrovuNow: function () {
+                var self = this;
+                this.api("POST", "/api/hydrovu/refresh", {})
+                  .then(function (res) {
+                    if (res && res.ok) {
+                      self.pollHydrovuSeries();
+                      self.pollHydrovuStatus();
+                    } else {
+                      alert("Refresh failed: " + ((res && res.message) || "unknown error"));
+                      self.pollHydrovuStatus();
+                    }
+                  })
+                  .catch(function (e) {
+                    alert("Refresh failed: " + (e && e.message ? e.message : e));
+                  });
+              },
+              deleteHydrovuCsv: function () {
+                var self = this;
+                if (!confirm("Delete hydrovu.csv? Logging continues; the next scrape rebuilds the file with the last 30 days of data.")) return;
+                var typed = prompt('Type "DELETE" to confirm.');
+                if (typed !== "DELETE") {
+                  alert("Cancelled — nothing was deleted.");
+                  return;
+                }
+                this.api("POST", "/api/hydrovu/delete", {}).then(function (res) {
+                  self.pollHydrovuStatus();
+                  if (res && res.deleted) alert("Deleted " + res.path);
+                  else alert("No file to delete.");
+                });
               },
               fmtWqValue: function (v) {
                 if (v === null || v === undefined) return "—";
@@ -2695,6 +3057,8 @@
                 self.pollOrca();
                 self.pollHydrovuSeries();
                 self.pollHydrovuStatus();
+                self.pollTideSeries();
+                self.pollTideStatus();
                 self.pollYoutubeApi();
               });
               setInterval(function () {
@@ -2734,6 +3098,14 @@
               }, 3600 * 1000);
               setInterval(function () {
                 self.pollHydrovuStatus();
+              }, 30000);
+              // Tide: NOAA is fetched every 15 min; re-fetch the chart
+              // every 5 so the "now" line and forecast keep moving.
+              setInterval(function () {
+                self.pollTideSeries();
+              }, 300 * 1000);
+              setInterval(function () {
+                self.pollTideStatus();
               }, 30000);
               setInterval(function () {
                 // Refresh OAuth + broadcast status independently of the
