@@ -19,7 +19,7 @@ A BlueOS extension ("Wailoa Cam") running in Docker on an **amd64** BlueOS host.
 - Starlink link-uptime logging.
 - Orca camera `/data` CSV logging.
 - HydroVu water-quality scraping.
-- NOAA tide logging (Hilo Bay, station 1617760) with a Live-tab chart and an Axis text overlay on the YouTube video.
+- NOAA tide logging (Hilo Bay, station 1617760) with a Live-tab chart.
 
 `README.md` has the feature spec and the API table, but parts of it are stale (it still mentions multi-arch CI and the `vshie/WailoaCam` repo).
 
@@ -46,9 +46,7 @@ Runtime: the entrypoint runs `python3 -u /app/main.py`. The UI/API listens on `P
 
 - **`_scheduler_loop`** (2 s tick) is the central supervisor. Each tick it reloads config and decides whether each pipeline should run (from the schedule/cycle or the manual `_*_force` flags). It restarts crashed or stalled YouTube ffmpeg (no RTMP bytes for `STREAM_STALL_SECS`) and runs the YouTube-health watchdog; the kickoff/link-down/post-recovery `end_reason` logic is described in README. Stereo gets its own `_tick_stereo`, called first, so the `continue`s in the YouTube and Axis sections can't starve it.
 - **`_apply_boot`** runs in its own thread so HTTP binds before slow camera calls (BlueOS health checks). It starts go2rtc on the fixed live feed *first*, then tries the legacy Axis profile setup, which may time out.
-- **Camera sources are split:**
-  - Live preview and mono recording use the fixed `CAMERA_RTSP_URL` (`rtsp://192.168.0.142:8554/unicast`, hard-coded in main.py, not configurable).
-  - YouTube still streams the Axis `youtubelive` profile through `AxisCamera.rtsp_url()` (`camera.py`, VAPIX digest, `camera_host` config).
+- **Camera source:** live preview, mono recording and YouTube all use the fixed `CAMERA_RTSP_URL` (`rtsp://192.168.0.142:8554/unicast`, hard-coded in main.py, not configurable). It's not an Axis camera (LIVE555, H.264 1024x768 ~25 fps), so there's no on-camera overlay. `AxisCamera` (`camera.py`, `camera_host` config) is legacy: only the DefaultFishpond profile setup (at boot and from the Settings button) and `/proxy/snapshot` still call it.
   - The browser plays go2rtc's fragmented MP4 (`/go2rtc/api/stream.mp4?src=livepreview`) in a `<video>` element. There's no WebRTC negotiation.
 - **Config** (`config.py`) is a JSON file at `/app/data/config.json` merged over `DEFAULT_CONFIG`. Modules receive config getters as lambdas and reload them on every cycle, so Settings edits apply without a restart. When adding a setting, add its default to `DEFAULT_CONFIG` and read it at use time.
 - **Time**: all scheduling uses fixed HST (`scheduler.SCHEDULE_TIMEZONE`, UTC−10) via `schedule_now()`. YouTube uses 15-minute slots with a weekday filter. The mono (`recordings_cycle`) and stereo (`stereo_cycle`) cycles use record-secs/pause-secs inside a fixed 07:45–18:00 window, which is a deliberate constant.
@@ -61,7 +59,7 @@ Runtime: the entrypoint runs `python3 -u /app/main.py`. The UI/API listens on `P
   - SQLite `/app/data/state.db` (overridable with `WAILOA_STATE_DB`) is shared by `bandwidth.py`, `link_uptime.py` (8.8.8.8 ping every 10 s), and `youtube_monitor.py`. Each module owns its tables and a lock.
   - `orca.py` appends to `/app/data/orca.csv`. Columns are the camera's `/data` keys converted to snake_case, plus a trailing raw `payload_json`.
   - `hydrovu.py` uses undocumented HydroVu SPA endpoints with a public token. `hydrovu.csv` is the source of truth. Hourly polls fetch only from the HydroVu time slice holding the newest CSV sample. Slices are epoch-aligned 491520 s buckets matched by start time, so a query must start on a boundary or the whole slice is dropped. The first poll after a start or a CSV delete backfills 30 days. The Live tab charts the last 7 days of it (`CHART_WINDOW_SECS`), and hides any parameter with no non-zero sample within `ACTIVE_WINDOW_SECS` (4 h) of the sonde's newest sample. That window is measured against the sonde, not the wall clock, so a sonde that has gone quiet doesn't blank every chart. All HydroVu API knowledge lives in that module.
-- **Tide** (`tide.py`, `tide_overlay.py`): polls NOAA's public CO-OPS API every 15 min. Observed water level is merged into `/app/data/tide.csv`; predictions and highs/lows stay in memory. `tide_overlay` keeps one Axis Dynamic Overlay text (found by its `Tide` prefix, so it survives restarts and camera reboots) on the YouTube camera, top-right, via `AxisCamera.overlay_upsert_text`.
+- **Tide** (`tide.py`): polls NOAA's public CO-OPS API every 15 min. Observed water level is merged into `/app/data/tide.csv`; predictions and highs/lows stay in memory. Live tab tile only; a video overlay would need the YouTube stream re-encoded.
 - **Frontend**: a single `app/static/index.html` (Vue 3 global build, no build step) plus `styles.css`.
 
 ## Conventions

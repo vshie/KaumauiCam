@@ -209,7 +209,7 @@
           <section v-show="tab === 'stream'" class="tab-panel">
             <div class="panel">
               <h2>YouTube Live</h2>
-              <p class="status-line">Pulls the Axis <code>youtubelive</code> stream profile and stream-copies it to YouTube with a silent AAC audio track — no re-encoding on the Pi.</p>
+              <p class="status-line">Pulls the fixed camera feed (<code>{{ cameraStreamUrl }}</code>, the same stream as the Live tab) and stream-copies it to YouTube with a silent AAC audio track — no re-encoding.</p>
 
               <h2 class="h2-spaced">
                 YouTube account (API mode)
@@ -650,7 +650,7 @@
           <section v-show="tab === 'settings'" class="tab-panel">
             <div class="panel">
               <h2>Camera</h2>
-              <p class="status-line">Live preview and recordings use the fixed square camera feed:</p>
+              <p class="status-line">Live preview, recordings and YouTube use the fixed square camera feed:</p>
               <p class="status-line"><code>{{ cameraStreamUrl }}</code></p>
               <h2 class="h2-spaced">Quota</h2>
               <label>Monthly quota (GB, 0 = no bar cap)</label>
@@ -661,7 +661,6 @@
                 <button type="button" class="btn" @click="saveSettings">Save settings</button>
                 <button type="button" class="btn btn-secondary" @click="resetBw">Reset month bandwidth counter</button>
                 <button type="button" class="btn btn-secondary" @click="applyFishpond">Apply DefaultFishpond H.265 1080p15</button>
-                <button type="button" class="btn btn-secondary" @click="applyYoutubelive">Apply youtubelive H.264 1080p30 4.5 Mbps</button>
               </div>
               <p class="status-line">Month counter resets automatically at local midnight on the 1st (by calendar month sum).</p>
             </div>
@@ -756,11 +755,6 @@
                 <input type="checkbox" v-model="tideEnabled" />
                 Enable tide logging
               </label>
-              <label class="ck-row">
-                <input type="checkbox" v-model="tideOverlayEnabled" />
-                Show current tide level and next high/low on the YouTube video
-              </label>
-              <p class="status-line hint">Drawn by the Axis camera in the top-right corner, so it appears on the YouTube stream. The live preview and mono recordings come from the other camera and don't show it. Hidden when NOAA's newest observation is more than 2 hours old.</p>
               <label>Refresh interval (seconds)</label>
               <input type="number" v-model.number="tideIntervalSecs" min="360" max="3600" step="60" />
               <p class="status-line hint">NOAA posts a new observation every 6 minutes; 900 (15 minutes) is the default.</p>
@@ -772,7 +766,6 @@
               </div>
               <p class="status-line">{{ tideSettingsLine }}</p>
               <p class="status-line err" v-if="tideStatus.last_error">{{ tideStatus.last_error }}</p>
-              <p class="status-line" v-if="tideOverlayLine">{{ tideOverlayLine }}</p>
               <h2 class="h2-spaced">CSV preview <span class="badge badge-muted">last 5 rows</span></h2>
               <pre class="reading-preview" v-if="tideStatus.preview">{{ tideStatus.preview }}</pre>
               <p class="status-line hint" v-else>CSV is empty.</p>
@@ -1330,7 +1323,6 @@
                   preview: "",
                 },
                 tideEnabled: true,
-                tideOverlayEnabled: true,
                 tideIntervalSecs: 900,
                 pc: null,
               };
@@ -1757,14 +1749,6 @@
                 parts.push("solid = observed (preliminary), dashed = predicted");
                 return parts.join(" · ");
               },
-              tideOverlayLine: function () {
-                var o = (this.tideStatus || {}).overlay;
-                if (!o) return "";
-                if (o.error) return "Tide overlay: camera error — " + o.error;
-                if (!this.tideOverlayEnabled) return "Tide overlay: off";
-                if (o.text) return "On video: " + o.text;
-                return o.applied_ts ? "Tide overlay: no current level, hidden" : "";
-              },
               tideBadgeText: function () {
                 var s = this.tideStatus || {};
                 if (!s.enabled) return "Disabled";
@@ -1922,7 +1906,6 @@
                       : 3600;
                     self.hydrovuTokenSet = !!c.hydrovu_token_set;
                     self.tideEnabled = c.tide_enabled !== false;
-                    self.tideOverlayEnabled = c.tide_overlay_enabled !== false;
                     self.tideIntervalSecs = c.tide_interval_secs != null ? c.tide_interval_secs : 900;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
@@ -2657,11 +2640,6 @@
                   alert("Applied DefaultFishPond profile parameters on camera.");
                 });
               },
-              applyYoutubelive: function () {
-                this.api("POST", "/api/camera/ensure-youtubelive", {}).then(function (r) {
-                  alert((r && r.message) || "Provisioned youtubelive profile on camera.");
-                });
-              },
               pollOrca: function () {
                 var self = this;
                 this.api("GET", "/api/orca/status")
@@ -2751,7 +2729,6 @@
                 var self = this;
                 var patch = {
                   tide_enabled: !!this.tideEnabled,
-                  tide_overlay_enabled: !!this.tideOverlayEnabled,
                   tide_interval_secs: Math.max(360, Math.min(3600, parseFloat(this.tideIntervalSecs) || 900)),
                 };
                 this.api("POST", "/api/config", patch).then(function () {
@@ -2786,88 +2763,6 @@
                 }
                 this.api("POST", "/api/tide/delete", {}).then(function (res) {
                   self.pollTideStatus();
-                  if (res && res.deleted) alert("Deleted " + res.path);
-                  else alert("No file to delete.");
-                });
-              },
-              fmtWqValue: function (v) {
-                if (v === null || v === undefined) return "—";
-                var n = Number(v);
-                if (!isFinite(n)) return "—";
-                var abs = Math.abs(n);
-                var digits = abs >= 100 ? 0 : abs >= 10 ? 1 : abs >= 1 ? 2 : 3;
-                return n.toFixed(digits);
-              },
-              pollHydrovuSeries: function () {
-                var self = this;
-                return this.api("GET", "/api/hydrovu/series")
-                  .then(function (body) {
-                    self.wqSeries = (body && body.series) || {};
-                    self.wqFetchedTs = (body && body.fetched_ts) || 0;
-                    self.wqActive = (body && body.active) || null;
-                    self.wqNewestSampleMs = (body && body.newest_sample_ms) || null;
-                  })
-                  .catch(function () {});
-              },
-              pollHydrovuStatus: function () {
-                var self = this;
-                return this.api("GET", "/api/hydrovu/status")
-                  .then(function (s) {
-                    if (s) self.wqStatus = s;
-                  })
-                  .catch(function () {});
-              },
-              saveHydrovu: function () {
-                var self = this;
-                var patch = {
-                  hydrovu_enabled: !!this.wqHydrovuEnabled,
-                  wq_overlay_enabled: !!this.wqOverlayEnabled,
-                  hydrovu_interval_secs: Math.max(60, Math.min(24 * 3600,
-                    parseFloat(this.wqHydrovuIntervalSecs) || 3600)),
-                };
-                var token = String(this.wqHydrovuTokenInput || "").trim();
-                // Only send the token when the operator actually typed
-                // something; the backend ignores empty tokens on POST
-                // to preserve the saved one across unrelated Settings
-                // saves.
-                if (token) patch.hydrovu_token = token;
-                this.api("POST", "/api/config", patch).then(function () {
-                  self.wqHydrovuTokenInput = "";
-                  alert("Saved.");
-                  self.loadConfig({ force: true });
-                  self.pollHydrovuStatus();
-                  // Ask the poller to refresh right away so charts show
-                  // fresh data without waiting an hour.
-                  self.api("POST", "/api/hydrovu/poke", {}).catch(function () {});
-                  setTimeout(function () { self.pollHydrovuSeries(); }, 3000);
-                });
-              },
-              refreshHydrovuNow: function () {
-                var self = this;
-                this.api("POST", "/api/hydrovu/refresh", {})
-                  .then(function (res) {
-                    if (res && res.ok) {
-                      self.pollHydrovuSeries();
-                      self.pollHydrovuStatus();
-                    } else {
-                      alert("Refresh failed: " + ((res && res.message) || "unknown error"));
-                      self.pollHydrovuStatus();
-                    }
-                  })
-                  .catch(function (e) {
-                    alert("Refresh failed: " + (e && e.message ? e.message : e));
-                  });
-              },
-              deleteHydrovuCsv: function () {
-                var self = this;
-                if (!confirm("Delete hydrovu.csv? Logging continues; the next scrape rebuilds the file with the last 30 days of data.")) return;
-                var typed = prompt('Type "DELETE" to confirm.');
-                if (typed !== "DELETE") {
-                  alert("Cancelled — nothing was deleted.");
-                  return;
-                }
-                this.api("POST", "/api/hydrovu/delete", {}).then(function (res) {
-                  self.pollHydrovuStatus();
                   if (res && res.deleted) alert("Deleted " + res.path);
                   else alert("No file to delete.");
                 });

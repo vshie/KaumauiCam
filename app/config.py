@@ -176,10 +176,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # the Live tab's tide chart.
     "tide_enabled": True,
     "tide_interval_secs": 900.0,
-    # Burn the current level, trend and next high/low into the Axis video
-    # (and so the YouTube stream) via a camera text overlay, top-right;
-    # see app/tide_overlay.py. Off removes the overlay from the camera.
-    "tide_overlay_enabled": True,
 }
 
 CONFIG_PATH = os.environ.get("WAILOA_CONFIG", "/app/data/config.json")

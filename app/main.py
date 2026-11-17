@@ -23,7 +23,6 @@ import orca
 import stereo_motion
 import stereo_snapshot
 import tide
-import tide_overlay
 import youtube_api
 import youtube_monitor
 from camera import AxisCamera
@@ -63,8 +62,9 @@ RECORDER_TAIL_GUARD_SECS = 30
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 GO2RTC_UPSTREAM = "http://127.0.0.1:1984"
 # The Wailoa camera is a fixed installation. Its RTSP endpoint is intentionally
-# not configurable: live preview and mono recordings must always use the same
-# known-good square stream.
+# not configurable: live preview, mono recordings and YouTube must always use
+# the same known-good square stream (H.264 High 1024x768 ~25 fps, keyframe
+# every ~2.4 s, measured 2026-11, so YouTube takes it stream-copied).
 CAMERA_RTSP_URL = "rtsp://192.168.0.142:8554/unicast"
 
 app = Flask(__name__, static_folder=STATIC_DIR, static_url_path="/static")
@@ -396,12 +396,6 @@ def _apply_boot() -> None:
         cam.ensure_defaultfishpond_profile()
     except Exception as e:
         logger.warning("boot fishpond profile: %s", e)
-    try:
-        cam = _camera()
-        ok, msg = cam.ensure_youtubelive_profile()
-        logger.info("boot youtubelive profile: %s (%s)", msg, ok)
-    except Exception as e:
-        logger.warning("boot youtubelive profile: %s", e)
 
 
 def _redact_rtsp(url: str) -> str:
@@ -409,9 +403,7 @@ def _redact_rtsp(url: str) -> str:
     return re.sub(r"(rtsp://[^:]+:)([^@]+)(@)", r"\1***\3", url or "")
 
 
-_EXTENSION_VERSION = "0.5.7"
-
-YOUTUBE_STREAM_PROFILE = "youtubelive"
+_EXTENSION_VERSION = "0.5.8"
 
 
 def _parse_listen_port() -> int:
@@ -556,8 +548,7 @@ def _scheduler_loop() -> None:
                     key = (cfg.get("youtube_stream_key") or "").strip()
             if want_yt and key:
                 if not youtube_streamer.is_running():
-                    cam = _camera()
-                    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
+                    rtsp = CAMERA_RTSP_URL
                     if youtube_streamer.start(rtsp, key):
                         now_ts = time.time()
                         with _state_lock:
@@ -939,8 +930,6 @@ def api_config():
             logger.exception("hydrovu.poke after config save failed")
     if any(k in data for k in ("tide_enabled", "tide_interval_secs")):
         tide.poke()
-    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled")):
-        tide_overlay.poke()
     out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
     out.pop("hydrovu_token", None)
     return jsonify(out)
@@ -971,13 +960,7 @@ def stream_start():
             return jsonify({"error": "youtube_stream_key empty"}), 400
     with _state_lock:
         _youtube_force = True
-    cam = _camera()
-    try:
-        cam.ensure_youtubelive_profile()
-    except Exception as e:
-        logger.warning("ensure youtubelive on stream/start: %s", e)
-    rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
-    if youtube_streamer.start(rtsp, key):
+    if youtube_streamer.start(CAMERA_RTSP_URL, key):
         now_ts = time.time()
         with _state_lock:
             _youtube_session_start = now_ts
@@ -1383,8 +1366,7 @@ def tide_series():
 
 @app.route("/api/tide/status", methods=["GET"])
 def tide_status():
-    """Poller state for the Settings tab plus a CSV preview and the
-    video overlay status."""
+    """Poller state for the Settings tab plus a CSV preview."""
     try:
         st = tide.status()
     except Exception as e:
@@ -1393,7 +1375,6 @@ def tide_status():
         st["preview"] = tide.csv_preview(max_rows=5)
     except Exception:
         st["preview"] = ""
-    st["overlay"] = tide_overlay.status()
     return jsonify(st)
 
 
@@ -1443,15 +1424,6 @@ def ensure_fishpond():
     try:
         _camera().ensure_defaultfishpond_profile()
         return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/api/camera/ensure-youtubelive", methods=["POST"])
-def ensure_youtubelive():
-    try:
-        ok, msg = _camera().ensure_youtubelive_profile()
-        return jsonify({"ok": ok, "message": msg})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -2105,16 +2077,11 @@ def main() -> None:
         hydrovu.start(get_cfg=cfgmod.load)
     except Exception:
         logger.exception("hydrovu.start failed")
-    # NOAA tide logger (Hilo Bay -> tide.csv) and its Axis text overlay,
-    # which reaches YouTube via the stream-copied youtubelive profile.
+    # NOAA tide logger (Hilo Bay -> tide.csv) for the Live tab's tide chart.
     try:
         tide.start(get_cfg=cfgmod.load)
     except Exception:
         logger.exception("tide.start failed")
-    try:
-        tide_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
-    except Exception:
-        logger.exception("tide_overlay.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

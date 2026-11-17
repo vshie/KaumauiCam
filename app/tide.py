@@ -12,8 +12,8 @@ background thread:
 - Predicted tide (6-minute curve) and the predicted highs/lows are kept
   in memory only: they're deterministic and cheap to re-fetch.
 
-``latest()`` feeds ``tide_overlay``, which puts the current level, its
-trend and the next high/low on the camera's video.
+``latest()`` gives the current level, its trend and the next high/low
+for the Live tab tile's header.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ REFETCH_SECS = 3600
 # The Live tab charts observed + predicted over [now - 48 h, now + 24 h].
 OBSERVED_WINDOW_SECS = 48 * 3600
 FORECAST_SECS = 24 * 3600
-# High/low events are fetched a little past the chart so the overlay's
+# High/low events are fetched a little past the chart so the tile's
 # "next high/low" is never empty near the end of the forecast window.
 EVENTS_AHEAD_SECS = 36 * 3600
 
@@ -251,8 +251,8 @@ def _merge_rows(samples: Dict[int, Tuple[float, str]]) -> int:
 def _observed() -> List[List[float]]:
     """Every observed sample in the CSV as ``[[ms, m], ...]``, time order.
 
-    Memoized on the file's mtime/size: the Live tab and the overlay read
-    this far more often than the CSV changes.
+    Memoized on the file's mtime/size: the Live tab reads this far more
+    often than the CSV changes.
     """
     global _observed_memo
     try:
@@ -413,13 +413,16 @@ def poke() -> None:
 
 
 def set_on_new_data(fn: Optional[Callable[[], None]]) -> None:
-    """Register a hook run on the poller thread after each successful poll."""
+    """Register a hook run on the poller thread after each successful poll.
+
+    Unused on Wailoa (main's camera overlay uses it); kept so tide.py stays
+    the same module on both branches."""
     global _on_new_data
     _on_new_data = fn
 
 
 def latest() -> Dict[str, Any]:
-    """Current tide for the video overlay.
+    """Current tide for the Live tab tile.
 
     ``{"level_m", "ts", "trend", "stale", "next_event"}``: ``ts`` is the
     newest observed sample (epoch secs), ``trend`` is ``"rising"``,

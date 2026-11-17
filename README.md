@@ -98,16 +98,15 @@ docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 \
 
 ### Camera
 
-- Live preview and mono recordings always use **`rtsp://192.168.0.142:8554/unicast`**. The endpoint is fixed in the extension and displayed read-only on the Live, Recordings, and Settings tabs.
+- Live preview, mono recordings and YouTube always use **`rtsp://192.168.0.142:8554/unicast`**. The endpoint is fixed in the extension and displayed read-only on the Live, Recordings, and Settings tabs.
 - The Live tab opens by default and starts playing on its own — no connect step. The browser reads go2rtc's fragmented-MP4 output (`/go2rtc/api/stream.mp4?src=livepreview`) straight into a `<video>` element, so there is no WebRTC signalling to negotiate. A watchdog reconnects every 5 s while the feed is down and whenever playback flat-lines for 15 s.
-- The separate Axis **`youtubelive`** profile remains the YouTube ingest source.
 
 ### YouTube
 
 - Two modes:
   - **API mode (recommended for daily unattended streaming):** the extension owns the full broadcast lifecycle via YouTube Data API v3 — one broadcast per HST calendar day, created and bound to a persistent liveStream on the first slot, transitioned to `live` once RTMP is active, and completed at end-of-day. OAuth uses the device flow ("go to google.com/device and enter a code"), so a headless Pi accessed from a different network is fully supported. One-time Cloud Console setup is required — see **[docs/youtube-api-setup.md](docs/youtube-api-setup.md)** for the walkthrough.
   - **Legacy stream-key mode:** paste a YouTube stream key + arm a broadcast in Studio manually. Unchanged from earlier versions of the extension. Kept as a fallback when API mode is off or not yet configured.
-- Ingest uses the dedicated **`youtubelive`** stream profile (H.264 1080p30, MBR 4500 kbps). Video is **stream-copied** (no re-encoding on the Pi), and a silent AAC audio track is mixed in from `lavfi anullsrc` because YouTube Live only registers a broadcast as live when an audio track is present. The only video input flag is `-fflags +genpts+igndts` to regenerate the PTS that Axis RTSP packets ship without; we deliberately do **not** use `+nobuffer`, `-use_wallclock_as_timestamps`, or `-shortest` (each was measured to drop ~70–90% of video frames before they reached the muxer).
+- Ingest uses the same fixed camera feed as the Live tab (H.264 High 1024×768, ~25 fps, keyframe every ~2.4 s, roughly 1 Mbps as measured in Nov 2026). Video is **stream-copied** (no re-encoding), and a silent AAC audio track is mixed in from `lavfi anullsrc` because YouTube Live only registers a broadcast as live when an audio track is present. The only video input flag is `-fflags +genpts+igndts` to regenerate missing PTS (originally needed for the Axis RTSP feed); we deliberately do **not** use `+nobuffer`, `-use_wallclock_as_timestamps`, or `-shortest` (each was measured to drop ~70–90% of video frames before they reached the muxer).
 - **Bandwidth:** `ffmpeg -progress` `total_size` deltas are stored in `/app/data/state.db`. Month total is the sum for the **current calendar month** (resets automatically on the 1st). Optional **+overhead %** in settings.
 - **Link uptime:** a background thread pings **8.8.8.8** every 10 s and writes each result (success + RTT) to `link_pings` in `/app/data/state.db`. The Streaming page renders a 24-hour status-bar-style graph (5-min buckets) and a 24h uptime % so transient Starlink outages are visible even though the page itself can't load while the modem is offline. Retention is 30 days.
 - **YouTube broadcast health monitor:** with a public channel URL configured (any of `/@handle`, `/@handle/streams`, `/@handle/live`, `/channel/UC…`, or a bare `@handle`) the extension polls the channel's `/live` page every 30 s while a session is supposed to be running and parses YouTube's own `isLiveNow` flag plus the canonical video URL out of the served HTML. Two things this gives you that the encoder-side view can't: (1) confirmation the broadcast is actually live to viewers, with concurrent viewer count and a click-through link to the watch page, and (2) automatic detection of YouTube's "Preparing stream" lockup — where ffmpeg cheerfully reports `running:true` and a healthy byte counter while YouTube never promotes the broadcast. The supervisor watchdog runs in two modes:
@@ -144,8 +143,8 @@ CamelCase keys are stored as snake_case. Nested objects (if the camera adds them
 
 The extension reads the water level at NOAA station **1617760 (Hilo, Hilo Bay, Kuhio Bay)**, next to the Wailoa River mouth, from NOAA's public CO-OPS data API every 15 minutes (no key needed). Values are in metres above MLLW. Observed 6-minute samples are merged into **`/app/data/tide.csv`** (`timestamp_iso, timestamp_epoch, water_level_m, quality`). The first fetch after a start or a CSV delete backfills 7 days. Each later fetch re-reads the last hour, so NOAA's corrections to preliminary values (`quality = p`) are picked up. NOAA's predicted tide and highs/lows are fetched each time and kept in memory only.
 
-- **Live tab:** a tile in the right column showing the last 48 h of observed level (solid) and the next 24 h of NOAA's prediction (dashed), with a "now" line, the times of predicted highs/lows, and the next high/low under the chart.
-- **Video overlay:** the Axis camera draws the current level, whether it's rising or falling (30-minute averages, so wave noise doesn't flip it), the next predicted high or low, and the measurement time in the top-right corner, e.g. `Tide 0.62 m MLLW, falling | next low 0.20 m 16:49 | 11:36 HST` (`app/tide_overlay.py`, Axis Dynamic Overlay API). YouTube stream-copies the Axis `youtubelive` profile, so the overlay appears on the stream at no CPU cost. The live preview and mono recordings come from the fixed RTSP camera and don't show it. It is hidden when NOAA's newest observation is more than 2 h old. Toggle it under **Settings → Tide (NOAA)**.
+- **Live tab:** a tile in the right column showing the last 48 h of observed level (solid) and the next 24 h of NOAA's prediction (dashed), with a "now" line, the times of predicted highs/lows, and the current level, its trend (30-minute averages, so wave noise doesn't flip it) and the next high/low.
+- There is no tide overlay on the video here: the Wailoa camera has no on-camera text overlay, and drawing it in ffmpeg would mean re-encoding the YouTube stream. (The Kaumaui build on `main` draws it with the Axis Dynamic Overlay API.)
 
 ## Push this repo (you deploy)
 
@@ -192,14 +191,13 @@ git push -u origin main
 | POST | `/api/orca/delete` | Wipe `orca.csv` (logging continues, next row appears at the next poll) |
 | POST | `/api/orca/poke` | Wake the logger thread immediately (used after Save on the Settings page) |
 | GET | `/api/tide/series` | Observed tide (last 48 h), NOAA prediction (-48 h to +24 h), highs/lows, current level |
-| GET | `/api/tide/status` | Tide poller status, CSV size/rows, 5-row preview, video overlay status |
+| GET | `/api/tide/status` | Tide poller status, CSV size/rows, 5-row preview |
 | POST | `/api/tide/refresh` | Fetch from NOAA now and return the result |
 | POST | `/api/tide/poke` | Wake the tide poller thread |
 | GET | `/api/tide/download` | Download `tide.csv` |
 | POST | `/api/tide/delete` | Wipe `tide.csv` (next poll backfills 7 days) |
 | POST | `/api/camera/ensure-livepreview` | Re-render the go2rtc config for the fixed camera stream |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
-| POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |
 | * | `/go2rtc/<path>` | Reverse proxy to go2rtc (serves the live MP4 stream) |
 
 ## License
