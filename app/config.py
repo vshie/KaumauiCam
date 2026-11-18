@@ -121,8 +121,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "tide_enabled": True,
     "tide_interval_secs": 900.0,
     # Burn the current level, trend and next high/low into the camera
-    # video via an Axis text overlay (top-right); see app/tide_overlay.py.
+    # video via an Axis text overlay (top-right); see app/topright_overlay.py.
     "tide_overlay_enabled": True,
+    # Estimated compass heading of the view (app/heading.py): PTZ pan plus
+    # this offset. The M5526-E has no compass; 172.5 calibrates pan 142.5
+    # (the field view on 2026-11-17) to NW, per the operator. Re-calibrate
+    # from Settings -> Camera heading. Shown as "Camera Facing: NW" on the line
+    # under the tide in the top-right video overlay when
+    # heading_overlay_enabled.
+    "heading_pan_offset_deg": 172.5,
+    "heading_overlay_enabled": True,
 }
 
 CONFIG_PATH = os.environ.get("KAUMAUI_CONFIG", "/app/data/config.json")

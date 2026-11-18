@@ -11,8 +11,8 @@ background thread:
 - Predicted tide (6-minute curve) and the predicted highs/lows are kept
   in memory only: they're deterministic and cheap to re-fetch.
 
-``latest()`` feeds ``tide_overlay``, which puts the current level, its
-trend and the next high/low on the camera's video.
+``latest()`` feeds ``topright_overlay``, which puts the current level,
+its trend and the next high/low on the camera's video.
 """
 
 from __future__ import annotations

@@ -154,7 +154,11 @@ The extension scrapes the **Kaumaui Sensor** location from Hawai'i Sea Grant's H
 The extension reads the water level at NOAA station **1617760 (Hilo, Hilo Bay, Kuhio Bay)** from NOAA's public CO-OPS data API every 15 minutes (no key needed). Values are in metres above MLLW. Observed 6-minute samples are merged into **`/app/data/tide.csv`** (`timestamp_iso, timestamp_epoch, water_level_m, quality`). The first fetch after a start or a CSV delete backfills 7 days. Each later fetch re-reads the last hour, so NOAA's corrections to preliminary values (`quality = p`) are picked up. NOAA's predicted tide and highs/lows are fetched each time and kept in memory only.
 
 - **Live tab:** one chart covering the last 48 h of observed level (solid) and the next 24 h of NOAA's prediction (dashed), with a "now" line and the predicted highs/lows.
-- **Video overlay:** the camera draws the current level, whether it's rising or falling (30-minute averages, so wave noise doesn't flip it), the next predicted high or low, and the measurement time in the top-right corner, e.g. `Tide 0.62 m MLLW, falling | next low 0.24 m 16:22 | 10:48 HST` (`app/tide_overlay.py`, same Axis Dynamic Overlay API as the water-quality line). It is hidden when NOAA's newest observation is more than 2 h old. Toggle it under **Settings → Tide (NOAA)**.
+- **Video overlay:** the camera draws the current level, whether it's rising or falling (30-minute averages, so wave noise doesn't flip it), the next predicted high or low, and the measurement time in the top-right corner, e.g. `Tide 0.62 m MLLW, falling | next low 0.24 m 16:22 | 10:48 HST`, with the camera heading on the line below (`app/topright_overlay.py`, same Axis Dynamic Overlay API as the water-quality line). The tide part is dropped when NOAA's newest observation is more than 2 h old. Toggle it under **Settings → Tide (NOAA)**.
+
+### Camera heading
+
+The M5526-E has no compass: it reports pan in degrees from its own mechanical zero, and its Geolocation API heading field is unset. The extension estimates the view's compass heading as pan + `heading_pan_offset_deg` and shows it as a 16-point code (N, NNE … NNW) on its own line (`Camera Facing: NW`) under the tide reading in the top-right video overlay and in the Live tab's PTZ readout. The pan is re-read every 30 s and right after a PTZ Stop/Home, so the heading follows the camera. The default offset (172.5°) comes from the field view on 2026-11-17 (pan 142.5° = NW). To recalibrate, point the camera, choose the direction in **Settings → Camera heading** and press **Set current view as …** (`POST /api/heading/calibrate {"code": "NW"}`).
 
 ## Push this repo (you deploy)
 
@@ -174,7 +178,7 @@ git push -u origin main
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET/POST | `/api/config` | Full config |
-| GET | `/api/ptz/position` | PTZ state |
+| GET | `/api/ptz/position` | PTZ state, plus `heading` (`{deg, code}`) estimated from pan |
 | POST | `/api/ptz/move` | `{pan,tilt,zoom}` continuous |
 | POST | `/api/ptz/stop` | Stop motion |
 | POST | `/api/ptz/home` | Home preset |
@@ -217,6 +221,7 @@ git push -u origin main
 | POST | `/api/tide/poke` | Wake the tide poller thread |
 | GET | `/api/tide/download` | Download `tide.csv` |
 | POST | `/api/tide/delete` | Wipe `tide.csv` (next poll backfills 7 days) |
+| POST | `/api/heading/calibrate` | Calibrate the compass heading: `{"code": "NW"}` = the camera's current view faces NW |
 | POST | `/api/camera/ensure-livepreview` | Create profile on camera |
 | POST | `/api/camera/ensure-fishpond` | Set DefaultFishPond params |
 | POST | `/api/camera/ensure-youtubelive` | Create/refresh `youtubelive` profile (H.264 1080p30 MBR 4.5 Mbps) |

@@ -19,8 +19,9 @@ import config as cfgmod
 import hydrovu
 import link_uptime
 import solar
+import heading
 import tide
-import tide_overlay
+import topright_overlay
 import wq_overlay
 import youtube_api
 import youtube_monitor
@@ -290,7 +291,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.6.0"
+_EXTENSION_VERSION = "0.6.1"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
@@ -773,8 +774,8 @@ def api_config():
         wq_overlay.poke()
     if any(k in data for k in ("tide_enabled", "tide_interval_secs")):
         tide.poke()
-    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled")):
-        tide_overlay.poke()
+    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled", "heading_overlay_enabled", "heading_pan_offset_deg")):
+        topright_overlay.poke()
     out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
     out.pop("hydrovu_token", None)
     return jsonify(out)
@@ -783,7 +784,10 @@ def api_config():
 @app.route("/api/ptz/position", methods=["GET"])
 def ptz_position():
     try:
-        return jsonify(_camera().ptz_position())
+        pos = _camera().ptz_position()
+        # Estimated compass direction of the view; see heading.py.
+        pos["heading"] = heading.estimate(heading.pan_of(pos), cfgmod.load())
+        return jsonify(pos)
     except Exception as e:
         # Camera offline is a normal operating state for this extension; return 503 and
         # skip the stack trace so we don't fill the log on every poll.
@@ -807,6 +811,8 @@ def ptz_move():
 def ptz_stop():
     try:
         _camera().ptz_stop()
+        # Refresh "Camera Facing: XX" on the video for the new pan.
+        topright_overlay.poke()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -816,9 +822,33 @@ def ptz_stop():
 def ptz_home():
     try:
         _camera().ptz_goto_preset("Home")
+        # The camera is still moving; the overlay's 30 s poll settles it.
+        topright_overlay.poke()
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/heading/calibrate", methods=["POST"])
+def heading_calibrate():
+    """Calibrate the compass heading: the camera's current view faces
+    ``{"code": "NW"}`` (any 16-point code). Stores the pan offset that
+    makes the current pan read as that direction."""
+    j = request.get_json(force=True, silent=True) or {}
+    code = str(j.get("code") or "").strip().upper()
+    if code not in heading.POINTS:
+        return jsonify({"error": f"code must be one of {', '.join(heading.POINTS)}"}), 400
+    try:
+        pan = heading.pan_of(_camera().ptz_position())
+    except Exception as e:
+        return jsonify({"error": f"camera: {e}"}), 503
+    if pan is None:
+        return jsonify({"error": "camera returned no pan"}), 503
+    offset = round(heading.offset_for(code, pan), 1)
+    cfgmod.update({"heading_pan_offset_deg": offset})
+    topright_overlay.poke()
+    logger.info("heading calibrated: pan %.2f = %s (offset %.1f)", pan, code, offset)
+    return jsonify({"ok": True, "pan": pan, "offset": offset, "heading": heading.estimate(pan, cfgmod.load())})
 
 
 @app.route("/api/ptz/autofocus", methods=["POST"])
@@ -1220,7 +1250,7 @@ def tide_status():
         st["preview"] = tide.csv_preview(max_rows=5)
     except Exception:
         st["preview"] = ""
-    st["overlay"] = tide_overlay.status()
+    st["overlay"] = topright_overlay.status()
     return jsonify(st)
 
 
@@ -1674,9 +1704,9 @@ def main() -> None:
     except Exception:
         logger.exception("tide.start failed")
     try:
-        tide_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
+        topright_overlay.start(get_cfg=cfgmod.load, get_camera=_camera)
     except Exception:
-        logger.exception("tide_overlay.start failed")
+        logger.exception("topright_overlay.start failed")
     threading.Thread(target=_scheduler_loop, daemon=True, name="scheduler").start()
     # Defer camera/go2rtc so we bind HTTP before VAPIX/RTSP timeouts (BlueOS health checks).
     threading.Thread(target=_apply_boot, daemon=True, name="boot").start()

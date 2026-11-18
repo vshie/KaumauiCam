@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import quote
 
 import requests
@@ -165,7 +165,7 @@ class AxisCamera:
     # (dynamic overlays don't persist across a reboot). Overlays whose text
     # doesn't start with the prefix are never touched.
 
-    def _overlay_ids_with_prefix(self, prefix: str) -> List[int]:
+    def _overlay_ids_with_prefix(self, prefix: Union[str, Tuple[str, ...]]) -> List[int]:
         return [
             int(o["identity"])
             for o in self.overlay_list_text()
@@ -173,7 +173,11 @@ class AxisCamera:
         ]
 
     def overlay_upsert_text(
-        self, prefix: str, text: str, position: str = "bottomLeft", font_size: int = 32
+        self,
+        prefix: Union[str, Tuple[str, ...]],
+        text: str,
+        position: str = "bottomLeft",
+        font_size: int = 32,
     ) -> Optional[int]:
         """Set the text of our ``prefix`` overlay, adding it if missing.
 
@@ -188,7 +192,7 @@ class AxisCamera:
             return None
         return self.overlay_add_text(text, position=position, font_size=font_size)
 
-    def overlay_remove_prefixed(self, prefix: str) -> List[int]:
+    def overlay_remove_prefixed(self, prefix: Union[str, Tuple[str, ...]]) -> List[int]:
         """Remove every overlay whose text starts with ``prefix``; returns their ids."""
         ids = self._overlay_ids_with_prefix(prefix)
         for i in ids:

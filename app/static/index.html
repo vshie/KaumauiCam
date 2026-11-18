@@ -430,6 +430,25 @@
             </div>
             <div class="panel">
               <h2>
+                Camera heading
+                <span class="badge" v-if="headingNow">Camera Facing: {{ headingNow.code }}</span>
+              </h2>
+              <p class="status-line">The camera has no compass, so the heading is estimated from its pan angle plus a calibration offset, and shown as a 16-point direction (N, NNE … NNW). To recalibrate, point the camera, pick the direction the view faces and press <em>Set</em>.</p>
+              <label class="ck-row">
+                <input type="checkbox" v-model="headingOverlayEnabled" />
+                Show "Camera Facing: XX" on the video (top right, under the tide)
+              </label>
+              <div class="row row-actions-spaced">
+                <select v-model="headingCalCode">
+                  <option v-for="c in headingPoints" :key="'hp-' + c" :value="c">{{ c }}</option>
+                </select>
+                <button type="button" class="btn btn-secondary" @click="calibrateHeading">Set current view as {{ headingCalCode }}</button>
+                <button type="button" class="btn" @click="saveHeading">Save</button>
+              </div>
+              <p class="status-line">{{ headingLine }}</p>
+            </div>
+            <div class="panel">
+              <h2>
                 Solar logging (Victron)
                 <span class="badge" :class="solarBadgeClass">{{ solarBadgeText }}</span>
               </h2>
@@ -1020,6 +1039,10 @@
                 },
                 tideEnabled: true,
                 tideOverlayEnabled: true,
+                headingOverlayEnabled: true,
+                headingOffsetDeg: null,
+                headingCalCode: "NW",
+                headingPoints: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
                 tideIntervalSecs: 900,
                 pc: null,
                 ptzBackoffMs: 800,
@@ -1221,12 +1244,25 @@
                 return parts.join(" · ");
               },
               tideOverlayLine: function () {
+                // The top-right overlay carries the heading and the tide.
                 var o = (this.tideStatus || {}).overlay;
                 if (!o) return "";
-                if (o.error) return "Tide overlay: camera error — " + o.error;
-                if (!this.tideOverlayEnabled) return "Tide overlay: off";
-                if (o.text) return "On video: " + o.text;
-                return o.applied_ts ? "Tide overlay: no current level, hidden" : "";
+                if (o.error) return "Top-right video overlay: camera error — " + o.error;
+                if (o.text) return "On video: " + o.text.split("\n").join(" / ");
+                if (!this.tideOverlayEnabled && !this.headingOverlayEnabled) return "Top-right video overlay: off";
+                return o.applied_ts ? "Top-right video overlay: nothing to show, hidden" : "";
+              },
+              headingNow: function () {
+                return ((this.tideStatus || {}).overlay || {}).heading || null;
+              },
+              headingLine: function () {
+                var h = this.headingNow;
+                var off = this.headingOffsetDeg;
+                var parts = [];
+                if (h) parts.push("Now facing " + h.code + " (est. " + Math.round(h.deg) + "°)");
+                else parts.push("Heading unknown until the camera reports its pan");
+                if (off != null) parts.push("pan offset " + Number(off).toFixed(1) + "°");
+                return parts.join(" · ") + ".";
               },
               tideBadgeText: function () {
                 var s = this.tideStatus || {};
@@ -1511,6 +1547,8 @@
                     self.wqOverlayEnabled = c.wq_overlay_enabled !== false;
                     self.tideEnabled = c.tide_enabled !== false;
                     self.tideOverlayEnabled = c.tide_overlay_enabled !== false;
+                    self.headingOverlayEnabled = c.heading_overlay_enabled !== false;
+                    self.headingOffsetDeg = c.heading_pan_offset_deg != null ? c.heading_pan_offset_deg : null;
                     self.tideIntervalSecs = c.tide_interval_secs != null ? c.tide_interval_secs : 900;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
                     self.draftYt = storedYt || cloneSched(c.youtube_schedule || {});
@@ -1530,7 +1568,8 @@
                 this.api("GET", "/api/ptz/position")
                   .then(function (p) {
                     self.ptzReadout =
-                      "pan=" + p.pan + " tilt=" + p.tilt + " zoom=" + p.zoom + " autofocus=" + (p.autofocus || "?");
+                      "pan=" + p.pan + " tilt=" + p.tilt + " zoom=" + p.zoom + " autofocus=" + (p.autofocus || "?") +
+                      (p.heading ? " · facing " + p.heading.code : "");
                     self.ptzBackoffMs = 800;
                     self.schedulePtz(800);
                   })
@@ -2215,6 +2254,28 @@
                     if (s) self.tideStatus = s;
                   })
                   .catch(function () {});
+              },
+              saveHeading: function () {
+                var self = this;
+                this.api("POST", "/api/config", { heading_overlay_enabled: !!this.headingOverlayEnabled }).then(function () {
+                  alert("Saved.");
+                  self.loadConfig({ force: true });
+                  setTimeout(function () { self.pollTideStatus(); }, 2000);
+                });
+              },
+              calibrateHeading: function () {
+                var self = this;
+                var code = this.headingCalCode;
+                if (!confirm("Set the camera's current view as facing " + code + "?")) return;
+                this.api("POST", "/api/heading/calibrate", { code: code })
+                  .then(function (r) {
+                    self.headingOffsetDeg = r.offset;
+                    alert("Calibrated: pan " + r.pan + "° now reads " + code + ".");
+                    setTimeout(function () { self.pollTideStatus(); }, 2000);
+                  })
+                  .catch(function (e) {
+                    alert("Calibration failed: " + (e && e.message ? e.message : e));
+                  });
               },
               saveTide: function () {
                 var self = this;
