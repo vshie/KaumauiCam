@@ -291,7 +291,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.6.1"
+_EXTENSION_VERSION = "0.6.2"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
@@ -774,7 +774,7 @@ def api_config():
         wq_overlay.poke()
     if any(k in data for k in ("tide_enabled", "tide_interval_secs")):
         tide.poke()
-    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled", "heading_overlay_enabled", "heading_pan_offset_deg")):
+    if any(k in data for k in ("tide_overlay_enabled", "tide_enabled", "heading_overlay_enabled", "heading_pan_offset_deg", "heading_pan_inverted")):
         topright_overlay.poke()
     out["hydrovu_token_set"] = bool((out.get("hydrovu_token") or "").strip())
     out.pop("hydrovu_token", None)
@@ -844,7 +844,7 @@ def heading_calibrate():
         return jsonify({"error": f"camera: {e}"}), 503
     if pan is None:
         return jsonify({"error": "camera returned no pan"}), 503
-    offset = round(heading.offset_for(code, pan), 1)
+    offset = round(heading.offset_for(code, pan, heading.inverted(cfgmod.load())), 1)
     cfgmod.update({"heading_pan_offset_deg": offset})
     topright_overlay.poke()
     logger.info("heading calibrated: pan %.2f = %s (offset %.1f)", pan, code, offset)

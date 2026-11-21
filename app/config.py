@@ -123,13 +123,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     # Burn the current level, trend and next high/low into the camera
     # video via an Axis text overlay (top-right); see app/topright_overlay.py.
     "tide_overlay_enabled": True,
-    # Estimated compass heading of the view (app/heading.py): PTZ pan plus
-    # this offset. The M5526-E has no compass; 172.5 calibrates pan 142.5
-    # (the field view on 2026-11-17) to NW, per the operator. Re-calibrate
-    # from Settings -> Camera heading. Shown as "Camera Facing: NW" on the line
-    # under the tide in the top-right video overlay when
-    # heading_overlay_enabled.
-    "heading_pan_offset_deg": 172.5,
+    # Estimated compass heading of the view (app/heading.py). The M5526-E
+    # has no compass. It is mounted upside down, so pan runs
+    # counter-clockwise: heading = offset - pan (heading_pan_inverted).
+    # 322.5 is from the operator's check on 2026-11-20: facing NW, the old
+    # upright formula (pan + 172.5) read S, i.e. pan was -3.75..18.75
+    # (mid 7.5), so offset = 315 + 7.5, good to about +/-11 deg.
+    # Re-calibrate from Settings -> Camera heading. Shown as "Camera
+    # Facing: NW" on the line under the tide in the top-right video overlay
+    # when heading_overlay_enabled.
+    "heading_pan_offset_deg": 322.5,
+    "heading_pan_inverted": True,
     "heading_overlay_enabled": True,
 }
 

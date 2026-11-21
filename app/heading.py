@@ -7,8 +7,12 @@ heading is pan plus a calibration offset (``heading_pan_offset_deg``),
 taken once by pointing the camera at a known direction and recording
 what it was (Settings -> Camera heading, ``/api/heading/calibrate``).
 
-Pan grows clockwise seen from above (panning right turns the view
-toward the east when it faces north), so heading = pan + offset.
+On an upright camera pan grows clockwise seen from above (panning
+right turns a north-facing view toward the east), so heading = pan +
+offset. The Kaumaui camera is mounted upside down, which reverses that:
+with ``heading_pan_inverted`` set, heading = offset - pan. Field case
+(2026-11-20): with the upright formula and offset 172.5 the overlay
+read S while the camera faced NW, and turned the wrong way as it panned.
 
 The result is only shown as a 16-point compass code (N, NNE, ... NNW):
 the calibration itself is "it's facing NW", good to a compass point
@@ -36,8 +40,14 @@ def deg_for(code: str) -> float:
     return POINTS.index(code.strip().upper()) * POINT_DEG
 
 
-def offset_for(code: str, pan: float) -> float:
+def inverted(cfg: Dict[str, Any]) -> bool:
+    return bool(cfg.get("heading_pan_inverted", False))
+
+
+def offset_for(code: str, pan: float, is_inverted: bool) -> float:
     """Calibration offset that makes ``pan`` read as ``code``."""
+    if is_inverted:
+        return (deg_for(code) + pan) % 360.0
     return (deg_for(code) - pan) % 360.0
 
 
@@ -49,7 +59,7 @@ def estimate(pan: Optional[float], cfg: Dict[str, Any]) -> Optional[Dict[str, An
         offset = float(cfg.get("heading_pan_offset_deg", 0.0))
     except (TypeError, ValueError):
         offset = 0.0
-    deg = (float(pan) + offset) % 360.0
+    deg = ((offset - float(pan)) if inverted(cfg) else (float(pan) + offset)) % 360.0
     return {"deg": round(deg, 1), "code": code_for(deg)}
 
 

@@ -126,8 +126,10 @@ def _tick() -> None:
     if cam is None:
         raise RuntimeError("no camera configured")
     est = None
+    pan = None
     if cfg.get("heading_overlay_enabled", True):
-        est = heading.estimate(heading.pan_of(cam.ptz_position()), cfg)
+        pan = heading.pan_of(cam.ptz_position())
+        est = heading.estimate(pan, cfg)
     show_tide = bool(cfg.get("tide_overlay_enabled", True)) and bool(cfg.get("tide_enabled", True))
     text = build_text(est["code"] if est else None, tide.latest() if show_tide else None)
     with _lock:
@@ -136,7 +138,13 @@ def _tick() -> None:
         _apply(cam, text)
         applied_ts = time.time()
         if text != prev:
-            logger.info("topright_overlay: %s", text or "off")
+            # One log line; the pan is logged so a heading can be checked
+            # (or calibrated) after the fact.
+            logger.info(
+                "topright_overlay: %s%s",
+                (text or "off").replace("\n", " / "),
+                f" (pan {pan:.2f})" if pan is not None else "",
+            )
     with _lock:
         _status.update(text=text, applied_ts=applied_ts, heading=est, error=None, error_ts=None)
 

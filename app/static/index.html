@@ -438,6 +438,10 @@
                 <input type="checkbox" v-model="headingOverlayEnabled" />
                 Show "Camera Facing: XX" on the video (top right, under the tide)
               </label>
+              <label class="ck-row">
+                <input type="checkbox" v-model="headingPanInverted" />
+                Camera mounted upside down (pan turns counter-clockwise)
+              </label>
               <div class="row row-actions-spaced">
                 <select v-model="headingCalCode">
                   <option v-for="c in headingPoints" :key="'hp-' + c" :value="c">{{ c }}</option>
@@ -1040,6 +1044,7 @@
                 tideEnabled: true,
                 tideOverlayEnabled: true,
                 headingOverlayEnabled: true,
+                headingPanInverted: true,
                 headingOffsetDeg: null,
                 headingCalCode: "NW",
                 headingPoints: ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"],
@@ -1261,7 +1266,7 @@
                 var parts = [];
                 if (h) parts.push("Now facing " + h.code + " (est. " + Math.round(h.deg) + "°)");
                 else parts.push("Heading unknown until the camera reports its pan");
-                if (off != null) parts.push("pan offset " + Number(off).toFixed(1) + "°");
+                if (off != null) parts.push("pan offset " + Number(off).toFixed(1) + "°" + (this.headingPanInverted ? ", upside-down mount" : ""));
                 return parts.join(" · ") + ".";
               },
               tideBadgeText: function () {
@@ -1548,6 +1553,7 @@
                     self.tideEnabled = c.tide_enabled !== false;
                     self.tideOverlayEnabled = c.tide_overlay_enabled !== false;
                     self.headingOverlayEnabled = c.heading_overlay_enabled !== false;
+                    self.headingPanInverted = !!c.heading_pan_inverted;
                     self.headingOffsetDeg = c.heading_pan_offset_deg != null ? c.heading_pan_offset_deg : null;
                     self.tideIntervalSecs = c.tide_interval_secs != null ? c.tide_interval_secs : 900;
                     var storedYt = useStoredDraft ? loadStoredDraft("yt") : null;
@@ -2257,7 +2263,10 @@
               },
               saveHeading: function () {
                 var self = this;
-                this.api("POST", "/api/config", { heading_overlay_enabled: !!this.headingOverlayEnabled }).then(function () {
+                this.api("POST", "/api/config", {
+                  heading_overlay_enabled: !!this.headingOverlayEnabled,
+                  heading_pan_inverted: !!this.headingPanInverted,
+                }).then(function () {
                   alert("Saved.");
                   self.loadConfig({ force: true });
                   setTimeout(function () { self.pollTideStatus(); }, 2000);
