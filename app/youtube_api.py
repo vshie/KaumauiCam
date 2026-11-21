@@ -182,6 +182,13 @@ _last_drive_ts = 0.0
 SWEEP_RETRY_SECS = 600.0
 _swept_ok = False
 _last_sweep_attempt = 0.0
+# Set when a replacement for a broadcast YouTube ended has just been
+# created; the scheduler takes it (``take_restart_request``) and restarts
+# ffmpeg. Field case (2026-11-20): a replacement bound to the persistent
+# stream while ffmpeg was already feeding it sat in "ready" with no
+# successful transition for 6 min, until the health watchdog restarted
+# ffmpeg and YouTube auto-started it on the fresh stream start.
+_restart_requested = False
 
 # Provider callable to fetch (client_id, client_secret) from config.
 # Wired by ``init()``. Kept as a callable rather than baked in so config
@@ -1071,6 +1078,9 @@ def ensure_todays_broadcast(
         created = _insert_broadcast(title, privacy)
         broadcast_id = created.get("id") or ""
         logger.info("Created broadcast %s (%s) for HST date %s", broadcast_id, title, hst)
+        if seq > 1:
+            global _restart_requested
+            _restart_requested = True
 
     if not broadcast_id:
         raise YouTubeApiError("broadcast insert returned no id")
@@ -1245,10 +1255,26 @@ def complete_today() -> None:
     _save_broadcast_state()
 
 
+def take_restart_request() -> bool:
+    """True once after a replacement broadcast was created (see
+    ``_restart_requested``); the caller restarts ffmpeg if it's running."""
+    global _restart_requested
+    requested, _restart_requested = _restart_requested, False
+    return requested
+
+
 def _mark_broadcast_error(msg: str) -> None:
     global _broadcast
     with _bcast_lock:
         if _broadcast is not None:
+            # Log each new error (drive_live retries every 30 s, so only
+            # on change); a later success clears last_error from the
+            # state, which used to leave no trace of why a broadcast was
+            # slow to go live.
+            if msg != _broadcast.get("last_error"):
+                logger.warning(
+                    "Broadcast %s: %s", _broadcast.get("broadcast_id"), msg
+                )
             _broadcast = dict(_broadcast, last_error=msg)
     _save_broadcast_state()
 

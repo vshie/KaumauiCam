@@ -291,7 +291,7 @@ def _apply_boot() -> None:
         logger.warning("boot go2rtc: %s", e)
 
 
-_EXTENSION_VERSION = "0.6.3"
+_EXTENSION_VERSION = "0.6.4"
 
 # Axis VAPIX I/O: port 1 is IOPort.I0 (configured as output/relay on this cam).
 WIPER_PORT = 1
@@ -377,6 +377,19 @@ def _scheduler_loop() -> None:
                         key = ""
                 else:
                     key = (cfg.get("youtube_stream_key") or "").strip()
+            if want_yt and key and api_mode and youtube_api.take_restart_request():
+                # A replacement for a broadcast YouTube ended was just
+                # bound to our stream; YouTube only starts it on a fresh
+                # stream start (see youtube_api._restart_requested), so
+                # restart ffmpeg now rather than waiting out the 6 min
+                # health watchdog. The start below runs this same tick.
+                if youtube_streamer.is_running():
+                    logger.info("Restarting YouTube ffmpeg for the replacement broadcast")
+                    youtube_streamer.stop(reason="replacement_broadcast")
+                    youtube_monitor.reset_unhealthy_clock()
+                    with _state_lock:
+                        _youtube_kickoff_start = 0.0
+                        _link_drop_during_session = False
             if want_yt and key:
                 if not youtube_streamer.is_running():
                     cam = _camera()
@@ -894,6 +907,9 @@ def stream_start():
         logger.warning("ensure youtubelive on stream/start: %s", e)
     rtsp = cam.rtsp_url(YOUTUBE_STREAM_PROFILE)
     if youtube_streamer.start(rtsp, key):
+        # This is the fresh stream start a replacement broadcast needs;
+        # don't let the scheduler restart it again.
+        youtube_api.take_restart_request()
         now_ts = time.time()
         with _state_lock:
             _youtube_session_start = now_ts
