@@ -277,7 +277,9 @@ def _save_broadcast_state() -> None:
 def _load_broadcast_state() -> None:
     global _broadcast
     data = _read_json(BROADCAST_STATE_PATH)
-    if not data or not data.get("broadcast_id"):
+    # A state with only ``seq`` is today's broadcast having ended on
+    # YouTube's side; keep it so the replacement gets the next title.
+    if not data or not (data.get("broadcast_id") or data.get("seq")):
         return
     with _bcast_lock:
         _broadcast = data
@@ -1006,16 +1008,17 @@ def ensure_todays_broadcast(
     # below. Guarding on the calendar date means a container restart
     # after midnight cleanly rolls over.
     if current and current.get("date") and current["date"] != hst:
-        try:
-            done = _retire_broadcast(current["broadcast_id"])
-            logger.info(
-                "Retired %s broadcast %s: %s", current["date"], current["broadcast_id"], done
-            )
-        except YouTubeApiError as e:
-            # The stale sweep below retries it.
-            logger.warning(
-                "Retiring %s broadcast failed: %s (continuing)", current["date"], e
-            )
+        if current.get("broadcast_id"):
+            try:
+                done = _retire_broadcast(current["broadcast_id"])
+                logger.info(
+                    "Retired %s broadcast %s: %s", current["date"], current["broadcast_id"], done
+                )
+            except YouTubeApiError as e:
+                # The stale sweep below retries it.
+                logger.warning(
+                    "Retiring %s broadcast failed: %s (continuing)", current["date"], e
+                )
         with _bcast_lock:
             _broadcast = None
         current = None
@@ -1038,6 +1041,12 @@ def ensure_todays_broadcast(
         return dict(current)
 
     title = _format_title(title_template, hst)
+    # Today's broadcast already ended on YouTube's side (see drive_live):
+    # number the replacement "-2", "-3"... so the archive keeps distinct
+    # titles and the recovery lookup below can't match the ended one.
+    seq = int((current or {}).get("seq") or 1)
+    if seq > 1:
+        title = f"{title}-{seq}"
     # Recovery path: fresh container that lost broadcast state, but a
     # broadcast for today already exists on YouTube from a previous
     # container. Reuse it instead of creating a duplicate.
@@ -1086,6 +1095,8 @@ def ensure_todays_broadcast(
         "watch_url": _watch_url(broadcast_id),
         "created_ts": time.time(),
         "last_error": None,
+        "seq": seq,
+        "ended_ids": list((current or {}).get("ended_ids") or []),
     }
     with _bcast_lock:
         _broadcast = state
@@ -1132,6 +1143,29 @@ def drive_live() -> Optional[str]:
     stream_status = ((stream.get("status") or {}).get("streamStatus") or "").lower()
     stream_health = ((stream.get("status") or {}).get("healthStatus") or {}).get("status") or ""
 
+    if lifecycle in ("complete", "revoked"):
+        # Ended on YouTube's side mid-day. Field case (2026-11-20): the
+        # camera dropped off the network for ~6 h, and YouTube completed
+        # the broadcast despite enableAutoStop=false. A completed
+        # broadcast can never go live again, so ffmpeg kept feeding the
+        # stream (health "good") while nothing showed on the channel, and
+        # the health watchdog restarted ffmpeg every 6 min to no effect.
+        # Drop it; the next ensure_todays_broadcast() creates "<title>-2"
+        # bound to the same stream, and the next drive_live() takes it
+        # live without restarting ffmpeg.
+        logger.warning(
+            "Broadcast %s (%r) ended on YouTube's side (%s); creating a replacement",
+            bid, current.get("title"), lifecycle,
+        )
+        with _bcast_lock:
+            _broadcast = {
+                "date": current.get("date"),
+                "seq": int(current.get("seq") or 1) + 1,
+                "ended_ids": list(current.get("ended_ids") or []) + [bid],
+            }
+            _last_drive_ts = 0.0
+        _save_broadcast_state()
+        return lifecycle
     if lifecycle in ("live",):
         _update_broadcast_fields(
             is_live=True,
